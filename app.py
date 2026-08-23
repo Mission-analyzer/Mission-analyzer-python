@@ -24,6 +24,9 @@ import icons
 import settings
 
 from mission_page import MissionPageMixin
+from mission_editor import MissionEditorMixin
+from ardupilot_link import ArduPilotLinkMixin
+from sd_file_manager import SDFileManagerMixin
 from analysis_page import AnalysisPageMixin
 from config_page import ConfigPageMixin
 from help_page import HelpPageMixin
@@ -60,7 +63,10 @@ def _bundled_asset_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
-class App(MissionPageMixin, AnalysisPageMixin, ConfigPageMixin, HelpPageMixin, tk.Tk):
+class App(
+    MissionPageMixin, MissionEditorMixin, ArduPilotLinkMixin, SDFileManagerMixin,
+    AnalysisPageMixin, ConfigPageMixin, HelpPageMixin, tk.Tk,
+):
     ICON_CANDIDATES = ("icon.png", "logo.png", "icon.ico", "logo.ico")
 
     def __init__(self):
@@ -75,7 +81,12 @@ class App(MissionPageMixin, AnalysisPageMixin, ConfigPageMixin, HelpPageMixin, t
         self.geometry("1000x760")
         self.minsize(760, 540)
 
-        self.palette = theme.apply_theme(self)
+        # Тема застосовується ЩЕ ДО self.app_theme_var (та створюється
+        # пізніше, у _init_vars) -- читаємо вибір напряму з
+        # self._settings_data, той самий ключ, що й app_theme_var потім
+        # прочитає для себе.
+        initial_dark = self._settings_data.get("app_theme", self._settings_data.get("mission_theme", "dark")) == "dark"
+        self.palette = theme.apply_theme(self, dark=initial_dark)
         self._try_set_icon()
 
         self.analyzer: MissionAnalyzer | None = None
@@ -127,6 +138,8 @@ class App(MissionPageMixin, AnalysisPageMixin, ConfigPageMixin, HelpPageMixin, t
             "alt_min": self.alt_min_var.get(),
             "turn_min": self.turn_min_var.get(),
             "zoom": self.zoom_var.get(),
+            "max_tiles": self.max_tiles_var.get(),
+            "app_theme": self.app_theme_var.get(),
             "provider_key": self.provider_key,
             "show_occupied": self.show_occupied_var.get(),
             "use_srtm": self.use_srtm_var.get(),
@@ -206,6 +219,20 @@ class App(MissionPageMixin, AnalysisPageMixin, ConfigPageMixin, HelpPageMixin, t
         self.srtm_var = tk.StringVar(value=d.get("srtm_dir", "srtm"))
         self.tilecache_var = tk.StringVar(value=d.get("map_cache_dir", "map_cache"))
         self.zoom_var = tk.IntVar(value=int(d.get("zoom", DEFAULT_ZOOM)))
+        # ліміт тайлів на один рендер карти (весь маршрут -- ОДНІЄЮ
+        # мозаїкою, не як панорамована вьюпорт-карта в Mission Planner --
+        # тому високий зум на широкому маршруті реально вимагає багато
+        # тайлів одразу). За замовчуванням піднято з 400 до 1200 --
+        # користувач може підняти ще, розуміючи компроміс (довше
+        # завантаження, більше пам'яті на composited-зображення).
+        self.max_tiles_var = tk.IntVar(value=int(d.get("max_tiles", 1200)))
+        # тема ВСЬОГО додатку -- "dark" (за замовчуванням) чи "light".
+        # Перемикається в Конфігурації, застосовується одразу
+        # (self.apply_app_theme()), без перезапуску програми. Читаємо і
+        # за старим ключем "mission_theme" теж -- на випадок, якщо
+        # налаштування збереглись із попередньої версії, де тема
+        # стосувалась лише сторінки "Місія".
+        self.app_theme_var = tk.StringVar(value=d.get("app_theme", d.get("mission_theme", "dark")))
         self.show_occupied_var = tk.BooleanVar(value=d.get("show_occupied", False))
         # дата і час планованого польоту (для аналізу метеоумов)
         self.flight_date_var = tk.StringVar(value=d.get("flight_date", ""))
@@ -223,6 +250,38 @@ class App(MissionPageMixin, AnalysisPageMixin, ConfigPageMixin, HelpPageMixin, t
     # ------------------------------------------------------------------ UI --
 
 
+    def _refresh_toggle_action_button_colors(self, buttons):
+        """Перефарбовує групу кнопок-перемикачів (Завантажити/Зберегти,
+        Info/Read/Write/Files тощо) під ПОТОЧНУ self.palette -- і при
+        першому створенні, і при живому перемиканні теми. Колір залежить
+        від того, яка кнопка зараз "активна" (btn._is_toggle_active)."""
+        colors = self.palette
+        dark = colors.get("dark", False)
+        idle_bg = "#3a3a3a" if dark else "#DEE3E8"
+        idle_fg = colors["text"]
+        idle_active_bg = "#4a4a4a" if dark else "#C9CFD6"
+        idle_pad = (16, 8)
+        active_bg, active_fg = colors["header_bg"], colors["text_light"]
+        active_pad = (8, 3)
+        border = colors["border"]
+
+        for b in buttons:
+            if not b.winfo_exists():
+                continue
+            if getattr(b, "_is_toggle_active", False):
+                b.configure(
+                    bg=active_bg, fg=active_fg, padx=active_pad[0], pady=active_pad[1],
+                    activebackground=active_bg, activeforeground=active_fg,
+                    highlightbackground=colors["text_muted"], highlightcolor=colors["text_muted"],
+                )
+            else:
+                b.configure(
+                    bg=idle_bg, fg=idle_fg, padx=idle_pad[0], pady=idle_pad[1],
+                    activebackground=idle_active_bg, activeforeground=idle_fg,
+                    highlightbackground=border, highlightcolor=border,
+                )
+
+
     def _make_toggle_action_buttons(self, parent, specs: list[tuple[str, object]]) -> list[tk.Button]:
         """
         Пара кнопок-переключателей (Завантажити/Зберегти): нажатая
@@ -230,39 +289,32 @@ class App(MissionPageMixin, AnalysisPageMixin, ConfigPageMixin, HelpPageMixin, t
         же логика, что и у кнопок навигации (_make_nav_button/_show_page:
         активная страница остаётся подсвеченной, пока не выбрана другая).
         specs -- список (текст, command).
-        """
-        colors = self.palette
-        idle_bg, idle_fg = "#DEE3E8", colors["text"]
-        idle_pad = (16, 8)
-        active_bg, active_fg = colors["header_bg"], colors["text_light"]
-        active_pad = (8, 3)
-        border = colors["border"]
 
+        Кожна створена кнопка реєструється в self._toggle_buttons_registry
+        (з міткою _is_toggle_active) -- інакше при ЖИВОМУ перемиканні
+        теми (apply_app_theme()) кольори цих кнопок лишились би
+        "заскленими" з моменту створення, а не оновились би під нову тему.
+        """
         buttons: list[tk.Button] = []
+        if not hasattr(self, "_toggle_buttons_registry"):
+            self._toggle_buttons_registry = []
 
         def set_active(target: tk.Button):
             for b in buttons:
-                if b is target:
-                    b.configure(
-                        bg=active_bg, fg=active_fg, padx=active_pad[0], pady=active_pad[1],
-                        highlightbackground=colors["text_muted"], highlightcolor=colors["text_muted"],
-                    )
-                else:
-                    b.configure(
-                        bg=idle_bg, fg=idle_fg, padx=idle_pad[0], pady=idle_pad[1],
-                        highlightbackground=border, highlightcolor=border,
-                    )
-            target.update_idletasks()
+                b._is_toggle_active = (b is target)
+            self._refresh_toggle_action_button_colors(buttons)
 
         for text, command in specs:
             btn = tk.Button(
                 parent, text=text,
-                bg=idle_bg, fg=idle_fg, activebackground="#C9CFD6", activeforeground=idle_fg,
                 font=("Segoe UI", 9, "bold"), bd=2, relief="groove", cursor="hand2",
-                padx=idle_pad[0], pady=idle_pad[1],
-                highlightthickness=1, highlightbackground=border, highlightcolor=border,
+                highlightthickness=1,
             )
+            btn._is_toggle_active = False
             buttons.append(btn)
+            self._toggle_buttons_registry.append(btn)
+
+        self._refresh_toggle_action_button_colors(buttons)
 
         for btn, (_text, command) in zip(buttons, specs):
             def on_click(_event=None, btn=btn, command=command):
@@ -302,11 +354,58 @@ class App(MissionPageMixin, AnalysisPageMixin, ConfigPageMixin, HelpPageMixin, t
         return frame
 
 
+    def apply_app_theme(self):
+        """Перемикає світла/темна ДЛЯ ВСЬОГО додатку -- викликається з
+        Конфігурації (радіокнопки). ttk.Style().configure() (усередині
+        theme.apply_theme()) одразу перефарбовує ВСІ вже створені
+        ttk-віджети зі стандартними стилями (TFrame/TLabel/TButton тощо)
+        -- без потреби чіпати їх по одному. Віджети з прямим bg= (не
+        через ttk.Style -- navbar, канваси графіків тощо) перефарбовуємо
+        тут явно, по одному на кожен такий випадок."""
+        dark = self.app_theme_var.get() == "dark"
+        self.palette = theme.apply_theme(self, dark=dark)
+
+        if hasattr(self, "navbar"):
+            self.navbar.configure(bg=self.palette["header_bg"])
+        if hasattr(self, "_header_separator"):
+            self._header_separator.configure(bg=self.palette["border"])
+        self._show_page(getattr(self, "_current_page", "mission"))
+
+        # Завантажити/Зберегти, Info/Read/Write/Files тощо -- звичайні
+        # tk.Button з кольором, "заскленим" при створенні; без цього
+        # виклику лишились би зі старими кольорами теми (саме звідси й
+        # був баг "білий шрифт на білому фоні" при перемиканні теми).
+        if hasattr(self, "_toggle_buttons_registry"):
+            self._refresh_toggle_action_button_colors(self._toggle_buttons_registry)
+        if hasattr(self, "_refresh_connect_btn_colors"):
+            self._refresh_connect_btn_colors()
+
+        if hasattr(self, "_apply_mission_theme"):
+            self._apply_mission_theme()
+        if hasattr(self, "_apply_analysis_theme"):
+            self._apply_analysis_theme()
+        if hasattr(self, "_apply_help_theme"):
+            self._apply_help_theme()
+
+
     def _show_page(self, page_key: str):
         self._current_page = page_key
         page = self.pages.get(page_key)
         if page is not None:
             page.tkraise()
+
+        # Статус-рядок (status_var) СПІЛЬНИЙ на весь застосунок -- одна
+        # змінна, не окрема на кожну сторінку. Без цього, якщо користувач
+        # відкривав "Аналіз" (там status_var показує "N точок, M
+        # критичних відміток" -- це коректно для "Аналіз"), а потім
+        # повертався на "Місія" -- напис про критичні відмітки
+        # ЛИШАВСЯ ВИСІТИ, хоча стосується зовсім іншої сторінки й
+        # зовсім іншого (важкого, лінивого) розрахунку analyze(), який
+        # на "Місія" взагалі не рахується. Тому при поверненні на
+        # "Місія" явно повертаємо статус до актуальної для неї
+        # формулювання -- без згадки критичних відміток.
+        if page_key == "mission" and getattr(self, "analyzer", None) is not None:
+            self.status_var.set(i18n.t("status_loaded_fmt", n=len(self.analyzer.nav_wps)))
 
         if hasattr(self, "connect_box"):
             if page_key == "mission":
@@ -490,7 +589,8 @@ class App(MissionPageMixin, AnalysisPageMixin, ConfigPageMixin, HelpPageMixin, t
         self._header_right_slot.pack(anchor="e", pady=(6, 0))
 
         # --- навигационная панель: 4 кнопки (иконка сверху + подпись) ---
-        navbar = tk.Frame(self, bg=self.palette["header_bg"])
+        self.navbar = tk.Frame(self, bg=self.palette["header_bg"])
+        navbar = self.navbar
         navbar.pack(fill="x")
         self.nav_buttons = {}
         for page_key, label_key, icon_name in (
@@ -503,6 +603,17 @@ class App(MissionPageMixin, AnalysisPageMixin, ConfigPageMixin, HelpPageMixin, t
             btn.pack(side="left")
             self.nav_buttons[page_key] = btn
             self._reg_i18n(btn._nav_label, "text", label_key)
+
+        # Тонка розділова лінія між шапкою+навігацією (темні, header_bg)
+        # і основною робочою областю (світла/темна залежно від теми) --
+        # без неї кнопки навігації "висіли в повітрі" одразу після
+        # запуску: темна смуга навігації впритул межувала зі світлим
+        # фоном сторінки без жодної межі. Звичайний tk.Frame (не
+        # ttk.Separator!) -- та сама причина, що й для решти кольорових
+        # елементів у програмі: на Windows нативна ttk-тема часто
+        # ігнорує кольори, задані через ttk.Style.
+        self._header_separator = tk.Frame(self, bg=self.palette["border"], height=2)
+        self._header_separator.pack(fill="x")
 
         # --- контейнер страниц: все страницы занимают одну и ту же ячейку,
         # видна только поднятая наверх (tkraise) -- resize окна не ломает
