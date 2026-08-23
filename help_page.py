@@ -14,6 +14,7 @@ from tkinter import messagebox, scrolledtext, ttk
 
 import i18n
 import meta
+import theme
 import updater
 
 
@@ -21,10 +22,6 @@ class HelpPageMixin:
     """Сторінка "Довідка": текст, changelog, оновлення."""
 
     def _build_help_page(self, content, pad):
-        page_help = ttk.Frame(content)
-        page_help.grid(row=0, column=0, sticky="nsew")
-        self.pages["help"] = page_help
-
         # === страница "Довідка" ===
         page_help = ttk.Frame(content)
         page_help.grid(row=0, column=0, sticky="nsew")
@@ -33,12 +30,18 @@ class HelpPageMixin:
         help_notebook = ttk.Notebook(page_help)
         help_notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
+        c = self.palette
+        sc = theme.slider_colors(self._help_is_dark_theme())
+
         help_tab = ttk.Frame(help_notebook)
         help_notebook.add(help_tab, text=i18n.t("tab_help"))
-        help_text = scrolledtext.ScrolledText(help_tab, wrap="word", font=("Segoe UI", 10))
-        help_text.pack(fill="both", expand=True)
-        help_text.insert("end", i18n.t("help_text_body"))
-        help_text.config(state="disabled")
+        self.help_text_widget = scrolledtext.ScrolledText(
+            help_tab, wrap="word", font=("Segoe UI", 10),
+            bg=c["panel"], fg=c["text"], insertbackground=c["text"],
+        )
+        self.help_text_widget.pack(fill="both", expand=True)
+        self.help_text_widget.insert("end", i18n.t("help_text_body"))
+        self.help_text_widget.config(state="disabled")
 
         changelog_tab = ttk.Frame(help_notebook)
         help_notebook.add(changelog_tab, text=i18n.t("tab_changelog"))
@@ -49,15 +52,30 @@ class HelpPageMixin:
             ttk.Button(update_row, command=self._check_for_updates), "text", "btn_check_updates",
         ).pack(side="left")
         self.update_status_var = tk.StringVar(value="")
-        ttk.Label(update_row, textvariable=self.update_status_var, foreground="#666").pack(
-            side="left", padx=(10, 0)
+        self._update_status_label = ttk.Label(
+            update_row, textvariable=self.update_status_var, foreground=theme.chart_colors(self._help_is_dark_theme())["muted"],
         )
+        self._update_status_label.pack(side="left", padx=(10, 0))
 
-        changelog_text = scrolledtext.ScrolledText(changelog_tab, wrap="word", font=("Segoe UI", 10))
-        changelog_text.pack(fill="both", expand=True)
-        changelog_text.insert("end", f"{i18n.t('app_title')} — {i18n.t('label_version')} {meta.VERSION}")
-        changelog_text.insert("end", meta.format_changelog(i18n.get_lang()))
-        changelog_text.config(state="disabled")
+        self.changelog_text_widget = scrolledtext.ScrolledText(
+            changelog_tab, wrap="word", font=("Segoe UI", 10),
+            bg=c["panel"], fg=c["text"], insertbackground=c["text"],
+        )
+        self.changelog_text_widget.pack(fill="both", expand=True)
+        self.changelog_text_widget.insert("end", f"{i18n.t('app_title')} — {i18n.t('label_version')} {meta.VERSION}")
+        self.changelog_text_widget.insert("end", meta.format_changelog(i18n.get_lang()))
+        self.changelog_text_widget.config(state="disabled")
+
+        # ScrolledText -- складений віджет (Text + власний Scrollbar
+        # усередині, .vbar). Той власний Scrollbar -- plain
+        # tkinter.Scrollbar (не ttk), тому кольори з ЄДИНОГО джерела
+        # (theme.slider_colors) застосовуються так само, як і до всіх
+        # інших повзунків/смуг прокрутки програми.
+        for widget in (self.help_text_widget, self.changelog_text_widget):
+            widget.vbar.configure(
+                bg=sc["bg"], troughcolor=sc["trough"], activebackground=sc["active"],
+                highlightthickness=0, bd=0,
+            )
 
         # Notebook.tab(text=...) -- інший API, ніж .configure(text=...),
         # тому окремий callback, а не self._reg_i18n. Текст довідки й
@@ -67,18 +85,46 @@ class HelpPageMixin:
             help_notebook.tab(help_tab, text=i18n.t("tab_help"))
             help_notebook.tab(changelog_tab, text=i18n.t("tab_changelog"))
 
-            help_text.config(state="normal")
-            help_text.delete("1.0", "end")
-            help_text.insert("end", i18n.t("help_text_body"))
-            help_text.config(state="disabled")
+            self.help_text_widget.config(state="normal")
+            self.help_text_widget.delete("1.0", "end")
+            self.help_text_widget.insert("end", i18n.t("help_text_body"))
+            self.help_text_widget.config(state="disabled")
 
-            changelog_text.config(state="normal")
-            changelog_text.delete("1.0", "end")
-            changelog_text.insert("end", f"{i18n.t('app_title')} — {i18n.t('label_version')} {meta.VERSION}")
-            changelog_text.insert("end", meta.format_changelog(i18n.get_lang()))
-            changelog_text.config(state="disabled")
+            self.changelog_text_widget.config(state="normal")
+            self.changelog_text_widget.delete("1.0", "end")
+            self.changelog_text_widget.insert(
+                "end", f"{i18n.t('app_title')} — {i18n.t('label_version')} {meta.VERSION}",
+            )
+            self.changelog_text_widget.insert("end", meta.format_changelog(i18n.get_lang()))
+            self.changelog_text_widget.config(state="disabled")
 
         self._retranslate_callbacks.append(_retranslate_help_page)
+
+
+    def _help_is_dark_theme(self) -> bool:
+        theme_var = getattr(self, "app_theme_var", None)
+        return theme_var.get() == "dark" if theme_var is not None else True
+
+
+    def _apply_help_theme(self):
+        """Перефарбовує ВЖЕ ПОБУДОВАНУ сторінку "Довідка" під поточну
+        тему -- викликається з app.py: apply_app_theme(). ScrolledText
+        (Text) не підхоплює зміну ttk.Style автоматично (bg= задається
+        один раз при створенні, це не ttk-стиль) -- перефарбовуємо явно,
+        разом із власним Scrollbar усередині кожного ScrolledText."""
+        if not hasattr(self, "help_text_widget"):
+            return  # сторінку ще не побудовано
+        c = self.palette
+        sc = theme.slider_colors(self._help_is_dark_theme())
+
+        for widget in (self.help_text_widget, self.changelog_text_widget):
+            if widget.winfo_exists():
+                widget.configure(bg=c["panel"], fg=c["text"], insertbackground=c["text"])
+                widget.vbar.configure(bg=sc["bg"], troughcolor=sc["trough"], activebackground=sc["active"])
+
+        if hasattr(self, "_update_status_label") and self._update_status_label.winfo_exists():
+            self._update_status_label.configure(foreground=theme.chart_colors(self._help_is_dark_theme())["muted"])
+
 
     def _check_for_updates(self, silent: bool = False):
         """Перевіряє GitHub Releases у фоновому потоці. silent=True --
@@ -92,7 +138,8 @@ class HelpPageMixin:
                 release = updater.check_latest_release()
                 has_update = updater.is_newer(release["tag"], meta.VERSION)
             except updater.UpdateError as e:
-                self.after(0, lambda: self._on_update_check_done(None, str(e), silent))
+                error_text = str(e)
+                self.after(0, lambda: self._on_update_check_done(None, error_text, silent))
                 return
             self.after(0, lambda: self._on_update_check_done(release if has_update else False, None, silent))
 
@@ -137,7 +184,8 @@ class HelpPageMixin:
                 app_dir = os.path.dirname(os.path.abspath(__file__))
                 backup_dir = updater.download_and_apply_update(release["zip_url"], app_dir)
             except Exception as e:
-                self.after(0, lambda: self._on_update_apply_done(None, str(e)))
+                error_text = str(e)
+                self.after(0, lambda: self._on_update_apply_done(None, error_text))
                 return
             self.after(0, lambda: self._on_update_apply_done(backup_dir, None))
 
