@@ -58,6 +58,26 @@ class ConfigPageMixin:
         opts.columnconfigure(1, weight=1)
         opts.columnconfigure(2, weight=1)
 
+        # Тема ВСЬОГО додатку (темна/світла) -- перемикається одразу, без
+        # перезапуску програми (app.py: apply_app_theme()).
+        theme_frame = ttk.LabelFrame(page_config)
+        theme_frame.pack(fill="x", **pad)
+        self._reg_i18n(theme_frame, "text", "label_app_theme")
+        self._reg_i18n(
+            ttk.Radiobutton(
+                theme_frame, variable=self.app_theme_var, value="dark",
+                command=self._on_app_theme_changed,
+            ),
+            "text", "radio_theme_dark",
+        ).pack(side="left", padx=6, pady=6)
+        self._reg_i18n(
+            ttk.Radiobutton(
+                theme_frame, variable=self.app_theme_var, value="light",
+                command=self._on_app_theme_changed,
+            ),
+            "text", "radio_theme_light",
+        ).pack(side="left", padx=(0, 6), pady=6)
+
         map_opts = ttk.LabelFrame(page_config)
         map_opts.pack(fill="x", **pad)
         self._reg_i18n(map_opts, "text", "label_map_settings")
@@ -98,6 +118,21 @@ class ConfigPageMixin:
             ttk.Checkbutton(map_opts, variable=self.show_occupied_var), "text", "check_occupied",
         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(2, 4))
 
+        # Ліміт тайлів на один рендер карти -- вплив на максимально
+        # доступний зум (весь маршрут будується ОДНІЄЮ мозаїкою, не як
+        # панорамована вьюпорт-карта в Mission Planner, тому високий зум
+        # на широкому маршруті реально вимагає багато тайлів одразу;
+        # занизький ліміт -- карта мовчки відкочує зум назад).
+        self._reg_i18n(ttk.Label(map_opts), "text", "label_max_tiles").grid(
+            row=2, column=0, sticky="w", padx=6, pady=(2, 4),
+        )
+        ttk.Entry(map_opts, textvariable=self.max_tiles_var, width=8).grid(
+            row=2, column=1, sticky="w", padx=4,
+        )
+        self._reg_i18n(ttk.Label(map_opts), "text", "hint_max_tiles").grid(
+            row=3, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 4),
+        )
+
         # === Картографічні та метеосервіси ===
         svc_frame = ttk.LabelFrame(page_config)
         svc_frame.pack(fill="x", **pad)
@@ -117,6 +152,11 @@ class ConfigPageMixin:
             ).grid(row=row_i, column=2, padx=(0, 6), pady=3)
 
         svc_frame.columnconfigure(1, weight=1)
+
+    def _on_app_theme_changed(self):
+        self.apply_app_theme()
+        self._save_settings()
+
 
     def _on_provider_selected(self, event=None):
         self.provider_key = self._provider_names.get(self.provider_var.get(), self.provider_key)
