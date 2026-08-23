@@ -41,13 +41,24 @@ _TR: dict[str, dict[str, str]] = {
             "MISSION ANALYZER — аналіз місій ArduPilot / Mission Planner (.waypoints)\n\n"
             "СТОРІНКИ\n"
             "Місія — «Завантажити» відкриває файл місії, одразу рахує повний аналіз і будує "
-            "карту; таблиця точок (як у Mission Planner) і карта — тут же. «Зберегти» — звіт у CSV.\n\n"
+            "карту; таблиця точок (як у Mission Planner) і карта — тут же. «Зберегти» — за "
+            "замовчуванням у .waypoints (або CSV, якщо обрати це розширення).\n\n"
             "Аналіз — результати: текстовий звіт, графік висоти (з рельєфом SRTM), графік "
             "кута нахилу траєкторії, глісада заходу на посадку.\n\n"
             "Конфігурація — пороги критичної висоти й кута повороту, папка SRTM (рельєф), "
             "папка диск-кешу тайлів карти, тип підложки карти (OpenStreetMap/Google), шар "
             "окупованих територій.\n\n"
             "Довідка — цей текст.\n\n"
+            "РЕДАГУВАННЯ МІСІЇ\n"
+            "Кнопка «Редагувати» з'являється після завантаження/зчитування місії. Точку можна "
+            "тягнути мишею на карті (позиція) і на профілі висот під картою (окремо висота). "
+            "У таблиці — подвійний клік по комірці редагує значення. Правий клік по рядку "
+            "таблиці або по точці на карті — додати точку/службову команду чи видалити цю точку.\n\n"
+            "ARDUPILOT\n"
+            "У шапці сторінки «Місія» — підключення по MAVLink (порт «AUTO» сам знайде "
+            "контролер). Read/Write — зчитати місію з борту або записати на борт. Info — "
+            "версія прошивки, датчики, стан SD-карти. Файли SD — перегляд, скачування, "
+            "вивантаження, видалення файлів і графіки польотних датафлеш-логів (.BIN).\n\n"
             "ЩО ПЕРЕВІРЯЄТЬСЯ\n"
             "- критично низька висота (за файлом і за рельєфом SRTM, в точках і вздовж усієї "
             "лінії польоту між точками)\n"
@@ -66,13 +77,23 @@ _TR: dict[str, dict[str, str]] = {
             "PAGES\n"
             "Mission — \"Load\" opens a mission file, immediately runs the full analysis and "
             "builds the map; the waypoint table (like in Mission Planner) and the map are right "
-            "here. \"Save\" exports the report as CSV.\n\n"
+            "here. \"Save\" defaults to .waypoints (or CSV if you pick that extension).\n\n"
             "Analysis — results: text report, elevation graph (with SRTM terrain), flight path "
             "angle graph, landing approach glide slope.\n\n"
             "Configuration — critical altitude/turn-angle thresholds, SRTM terrain tile folder, "
             "map tile disk cache folder, map basemap type (OpenStreetMap/Google), occupied-"
             "territories layer.\n\n"
             "Help — this text.\n\n"
+            "EDITING A MISSION\n"
+            "The \"Edit\" button appears once a mission is loaded/read. Drag a point on the map "
+            "to move it (position), or on the altitude profile below the map to change just its "
+            "altitude. Double-click a table cell to edit its value. Right-click a table row or a "
+            "point on the map to add a waypoint/command, or delete that point.\n\n"
+            "ARDUPILOT\n"
+            "On the Mission page header — MAVLink connection (\"AUTO\" port finds the controller "
+            "itself). Read/Write — download the mission from the aircraft or upload it. Info — "
+            "firmware version, sensors, SD card status. SD Files — browse, download, upload, "
+            "delete files, and plot flight dataflash logs (.BIN).\n\n"
             "WHAT IS CHECKED\n"
             "- critically low altitude (from the file and from SRTM terrain, at points and along "
             "the whole flight line between points)\n"
@@ -188,6 +209,10 @@ _TR: dict[str, dict[str, str]] = {
     "status_ready_fmt": {
         "uk": "Готово: {n} точок маршруту, {m} критичних відміток",
         "en": "Done: {n} route points, {m} critical flags",
+    },
+    "status_loaded_fmt": {
+        "uk": "Завантажено: {n} точок маршруту",
+        "en": "Loaded: {n} route points",
     },
     "msg_no_data_title": {"uk": "Немає даних", "en": "No data"},
     "msg_no_data_body": {"uk": "Спочатку виконай аналіз", "en": "Run analysis first"},
@@ -545,6 +570,190 @@ _TR: dict[str, dict[str, str]] = {
     "weather_crosswind_map_label_fmt": {
         "uk": "Боковий вітер: {cross:.0f}°",
         "en": "Crosswind: {cross:.0f}°",
+    },
+
+    # --- кнопка "Info" на "Місія": інформація про політний контролер ---
+    "btn_info": {"uk": "Info", "en": "Info"},
+    "btn_read": {"uk": "Зчитати", "en": "Read"},
+    "btn_write": {"uk": "Записати", "en": "Write"},
+    "btn_close": {"uk": "Закрити", "en": "Close"},
+    "status_fetching_info": {"uk": "Отримання інформації...", "en": "Fetching info..."},
+    "dlg_flight_info_title": {
+        "uk": "Інформація про політний контролер",
+        "en": "Flight controller info",
+    },
+    "info_header_fmt": {
+        "uk": "{autopilot} / {vtype}",
+        "en": "{autopilot} / {vtype}",
+    },
+    "info_section_firmware": {"uk": "Прошивка та плата", "en": "Firmware & board"},
+    "info_no_response": {"uk": "Немає відповіді від контролера", "en": "No response from the controller"},
+    "info_fw_version_fmt": {"uk": "Версія прошивки: {version}", "en": "Firmware version: {version}"},
+    "info_board_version_fmt": {"uk": "Версія плати: {version}", "en": "Board version: {version}"},
+    "info_vendor_product_fmt": {
+        "uk": "Vendor ID: {vendor}   Product ID: {product}",
+        "en": "Vendor ID: {vendor}   Product ID: {product}",
+    },
+    "info_uid_fmt": {"uk": "UID: {uid}", "en": "UID: {uid}"},
+    "info_git_hash_fmt": {"uk": "Git-хеш прошивки: {hash}", "en": "Firmware git hash: {hash}"},
+    "info_section_sensors": {"uk": "Датчики", "en": "Sensors"},
+    "info_no_sensors": {"uk": "Дані про датчики відсутні", "en": "No sensor data available"},
+    "info_sensor_unhealthy": {"uk": "НЕСПРАВНИЙ", "en": "UNHEALTHY"},
+    "info_battery_fmt": {
+        "uk": "Батарея: {voltage} В, {current} А, лишилось {remaining}%",
+        "en": "Battery: {voltage} V, {current} A, {remaining}% remaining",
+    },
+    "value_na": {"uk": "н/д", "en": "n/a"},
+    "info_section_storage": {"uk": "SD-карта", "en": "SD card"},
+    "info_no_sd_card": {"uk": "SD-карта не знайдена або недоступна", "en": "SD card not found or unavailable"},
+    "info_sd_present_no_capacity": {
+        "uk": "Карта є й читається (підтверджено списком файлів), але контролер не повідомляє обсяг/зайнято/вільно",
+        "en": "Card is present and readable (confirmed by file listing), but the controller doesn't report capacity/used/free",
+    },
+    "info_storage_capacity_fmt": {
+        "uk": "Обсяг: {total:.0f} МБ, зайнято {used:.0f} МБ, вільно {available:.0f} МБ",
+        "en": "Capacity: {total:.0f} MB, used {used:.0f} MB, free {available:.0f} MB",
+    },
+    "info_storage_speed_fmt": {
+        "uk": "Швидкість: читання {read:.1f} МБ/с, запис {write:.1f} МБ/с",
+        "en": "Speed: read {read:.1f} MB/s, write {write:.1f} MB/s",
+    },
+    "info_section_files": {"uk": "Файли на SD-карті (корінь)", "en": "Files on SD card (root)"},
+    "info_no_files": {"uk": "Порожньо", "en": "Empty"},
+    "info_ftp_not_supported": {
+        "uk": "Контролер не підтримує MAVLink FTP -- список файлів недоступний",
+        "en": "The controller doesn't support MAVLink FTP -- file list unavailable",
+    },
+    "info_ftp_error_fmt": {"uk": "Не вдалося отримати список файлів: {error}", "en": "Could not get file list: {error}"},
+    "info_fetch_error_fmt": {
+        "uk": "Не вдалося отримати інформацію від контролера:\n{error}",
+        "en": "Could not get info from the controller:\n{error}",
+    },
+
+    # --- AUTO-підключення (перебір портів/швидкостей) ---
+    "status_auto_detecting": {"uk": "Автопошук порту...", "en": "Auto-detecting port..."},
+    "msg_no_heartbeat_body": {
+        "uk": "Порт відкрито, але heartbeat від контролера не отримано",
+        "en": "Port opened, but no heartbeat received from the controller",
+    },
+    "msg_no_ports_found": {"uk": "Не знайдено жодного COM-порту", "en": "No COM ports found"},
+    "msg_auto_detect_failed": {
+        "uk": "Жоден порт не відповів на MAVLink heartbeat",
+        "en": "No port responded to a MAVLink heartbeat",
+    },
+
+    # --- файловий менеджер SD-карти ---
+    "btn_sd_files": {"uk": "Файли SD", "en": "SD Files"},
+    "dlg_sd_files_title": {"uk": "Файли на SD-карті", "en": "SD card files"},
+    "col_name": {"uk": "Ім'я", "en": "Name"},
+    "col_size": {"uk": "Розмір, Б", "en": "Size, B"},
+    "btn_download": {"uk": "Завантажити на ПК", "en": "Download to PC"},
+    "btn_upload": {"uk": "Вивантажити на SD", "en": "Upload to SD"},
+    "btn_delete": {"uk": "Видалити", "en": "Delete"},
+    "btn_refresh": {"uk": "Оновити", "en": "Refresh"},
+    "status_loading_list": {"uk": "Завантаження списку...", "en": "Loading list..."},
+    "msg_select_file_not_dir": {
+        "uk": "Оберіть файл (не папку) для завантаження",
+        "en": "Select a file (not a folder) to download",
+    },
+    "status_downloading_file_fmt": {"uk": "Завантаження {name}...", "en": "Downloading {name}..."},
+    "status_download_done": {"uk": "Файл завантажено", "en": "File downloaded"},
+    "status_uploading_file_fmt": {"uk": "Вивантаження {name}...", "en": "Uploading {name}..."},
+    "status_upload_done": {"uk": "Файл вивантажено", "en": "File uploaded"},
+    "status_deleting_fmt": {"uk": "Видалення {name}...", "en": "Deleting {name}..."},
+    "status_delete_done": {"uk": "Видалено", "en": "Deleted"},
+    "msg_confirm_delete_fmt": {
+        "uk": "Видалити «{name}» з SD-карти? Це незворотньо.",
+        "en": "Delete \"{name}\" from the SD card? This cannot be undone.",
+    },
+    "msg_transfer_failed_fmt": {
+        "uk": "Операція не вдалася:\n{error}",
+        "en": "Operation failed:\n{error}",
+    },
+
+    # --- перегляд файлу без завантаження на диск, оновлений список ---
+    "btn_preview": {"uk": "Перегляд", "en": "Preview"},
+    "status_list_refreshed": {"uk": "Список оновлено", "en": "List refreshed"},
+    "status_loading_preview_fmt": {
+        "uk": "Завантаження {name} для перегляду...",
+        "en": "Loading {name} for preview...",
+    },
+    "dlg_preview_title_fmt": {"uk": "Перегляд: {name}", "en": "Preview: {name}"},
+    "msg_file_too_large_preview_fmt": {
+        "uk": "Файл завеликий для перегляду ({size} Б). Скачайте його на комп'ютер.",
+        "en": "File is too large to preview ({size} B). Download it to your computer instead.",
+    },
+
+    # --- людські назви кодів помилок MAVLink FTP (FtpError) ---
+    "info_ftp_err_fail": {"uk": "загальна помилка", "en": "generic failure"},
+    "info_ftp_err_errno": {"uk": "помилка файлової системи на контролері", "en": "filesystem error on the controller"},
+    "info_ftp_err_bad_size": {"uk": "невірний розмір пакета", "en": "invalid packet size"},
+    "info_ftp_err_bad_session": {
+        "uk": "невірна сесія (спробуйте ще раз)",
+        "en": "invalid session (try again)",
+    },
+    "info_ftp_err_no_sessions": {"uk": "немає вільних сесій на контролері", "en": "no free sessions on the controller"},
+    "info_ftp_err_eof": {"uk": "кінець файлу", "en": "end of file"},
+    "info_ftp_err_unknown_cmd": {"uk": "невідома команда", "en": "unknown command"},
+    "info_ftp_err_exists": {"uk": "файл вже існує", "en": "file already exists"},
+    "info_ftp_err_protected": {"uk": "файл захищено від видалення", "en": "file is protected from deletion"},
+    "info_ftp_err_not_found": {
+        "uk": "контролер не знайшов такий файл/шлях",
+        "en": "the controller couldn't find that file/path",
+    },
+    "info_ftp_err_bad_args": {"uk": "невірні параметри запиту", "en": "invalid request parameters"},
+    "info_ftp_err_local_open": {
+        "uk": "не вдалося відкрити локальний файл на комп'ютері",
+        "en": "could not open the local file on this computer",
+    },
+    "info_ftp_err_timeout": {"uk": "немає відповіді від контролера (тайм-аут)", "en": "no reply from the controller (timeout)"},
+    "info_ftp_err_unknown_fmt": {"uk": "код помилки {code}", "en": "error code {code}"},
+    "label_binary_hexdump": {"uk": "бінарний, hex", "en": "binary, hex"},
+
+    # --- графіки датафлеш-логу (.BIN) ---
+    "btn_log_graphs": {"uk": "Графіки логу", "en": "Log graphs"},
+    "status_downloading_log_fmt": {
+        "uk": "Завантаження {name} для аналізу...",
+        "en": "Downloading {name} for analysis...",
+    },
+    "msg_no_log_data": {
+        "uk": "У файлі не знайдено даних для графіків (не датафлеш-лог або порожній)",
+        "en": "No graphable data found in the file (not a dataflash log, or empty)",
+    },
+    "dlg_log_graphs_title_fmt": {"uk": "Графіки логу: {name}", "en": "Log graphs: {name}"},
+    "label_log_altitude": {"uk": "Висота, м", "en": "Altitude, m"},
+    "label_log_speed": {"uk": "Швидкість (GPS), м/с", "en": "Speed (GPS), m/s"},
+    "label_log_voltage": {"uk": "Напруга батареї, В", "en": "Battery voltage, V"},
+    "ctx_open_folder": {"uk": "Відкрити", "en": "Open"},
+
+    # --- редактор місії ---
+    "btn_edit_mission": {"uk": "Редагувати", "en": "Edit"},
+    "btn_stop_editing": {"uk": "Завершити редагування", "en": "Stop editing"},
+    "ctx_add_waypoint": {"uk": "Додати точку", "en": "Add waypoint"},
+    "ctx_add_command": {"uk": "Додати команду", "en": "Add command"},
+    "dlg_choose_command_title": {"uk": "Оберіть команду", "en": "Choose command"},
+    "btn_ok": {"uk": "OK", "en": "OK"},
+    "box_altitude_profile": {"uk": "Профіль висот", "en": "Altitude profile"},
+    "label_distance_axis": {"uk": "Дистанція вздовж маршруту", "en": "Distance along route"},
+    "unit_meters_axis": {"uk": "м", "en": "m"},
+    "unit_km_axis": {"uk": "км", "en": "km"},
+    "unit_degrees_axis": {"uk": "°", "en": "°"},
+    "label_waypoint_axis": {"uk": "№ точки", "en": "waypoint #"},
+    "status_zoom_capped_fmt": {
+        "uk": "Зум обмежено до {zoom} -- на цій ділянці маршруту вищий зум вимагає забагато тайлів.",
+        "en": "Zoom capped to {zoom} -- higher zoom needs too many tiles for this route's area.",
+    },
+    "label_max_tiles": {"uk": "Ліміт тайлів карти:", "en": "Map tile limit:"},
+    "hint_max_tiles": {
+        "uk": "Вищий ліміт -- доступний більший зум на широких маршрутах, але довше завантаження й більше пам'яті.",
+        "en": "Higher limit -- more zoom available on wide routes, but slower loading and more memory.",
+    },
+    "label_app_theme": {"uk": "Тема програми:", "en": "App theme:"},
+    "radio_theme_dark": {"uk": "Темна", "en": "Dark"},
+    "radio_theme_light": {"uk": "Світла", "en": "Light"},
+    "msg_terrain_unavailable": {
+        "uk": "Рельєф недоступний -- увімкніть SRTM у Конфігурації",
+        "en": "Terrain unavailable -- enable SRTM in Configuration",
     },
 }
 
