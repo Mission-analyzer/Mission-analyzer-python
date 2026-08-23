@@ -25,8 +25,10 @@ from geo import haversine_m, bearing_deg
 from elevation_view import draw_elevation_profile, draw_takeoff_profile
 from angle_view import draw_angle_profile
 from landing_view import draw_landing_approach
-from map_view import compute_tile_bounds, fetch_tiles, render_tiles, bind_pan, MapTooLargeError
-from overview_map import compute_area_tile_bounds, render_area_map, render_route_overview
+from mission_page import MISSION_THEME_DARK, MISSION_THEME_LIGHT
+import theme
+from map_view import fetch_tiles, bind_pan, MapTooLargeError, render_viewport, compute_viewport_tile_bounds
+from overview_map import compute_area_tile_bounds, render_area_map
 import i18n
 
 
@@ -48,11 +50,12 @@ class AnalysisPageMixin:
         flight_row.pack(fill="x", **pad)
 
         self._reg_i18n(ttk.Label(flight_row), "text", "label_flight_date").pack(side="left")
+        _date_dark = self.palette.get("dark", False)
         self._date_btn = tk.Button(
             flight_row,
             textvariable=self.flight_date_var,
             font=("Segoe UI", 9, "bold"),
-            bg="#DEE3E8", fg=self.palette["text"],
+            bg=("#3a3a3a" if _date_dark else "#DEE3E8"), fg=self.palette["text"],
             bd=2, relief="groove", cursor="hand2", padx=8, pady=3,
             highlightthickness=1,
             highlightbackground=self.palette["border"],
@@ -102,6 +105,9 @@ class AnalysisPageMixin:
         self._last_meteo_raw = None        # кеш сирих даних API -- для ретрансляції тексту погоди без мережі
         self._glide_issues_text = ""       # текст проблем глісади зі звіту (наповнюється при завантаженні місії)
         self._land_weather_text = ""       # текст погоди для посадки (наповнюється по кнопці "Отримати метео")
+        self._analysis_outer_canvases = []  # усі "outer" канваси вкладок (make_scroll_tab) -- для перефарбовки при зміні теми
+        self._analysis_report_texts = []  # усі tk.Text звітів (make_plain_text) -- те саме
+        self._analysis_vbars = []  # усі tk.Scrollbar вкладок (make_scroll_tab) -- те саме
 
         def make_scroll_tab(tab_title_key: str):
             """Один вертикальний скрол на всю вкладку -- контент іде
@@ -117,7 +123,19 @@ class AnalysisPageMixin:
             )
 
             outer = tk.Canvas(tab, highlightthickness=0, bg=self.palette["bg"])
-            vbar = ttk.Scrollbar(tab, orient="vertical", command=outer.yview)
+            self._analysis_outer_canvases.append(outer)
+            # tk.Scrollbar (НЕ ttk.Scrollbar!) -- та сама причина, що й
+            # для всіх інших повзунків/смуг прокрутки програми: на
+            # Windows нативна ttk-тема часто ігнорує кольори, задані
+            # через ttk.Style. Кольори -- з ЄДИНОГО джерела
+            # (theme.slider_colors) -- той самий вигляд, що й на "Місія".
+            sc = theme.slider_colors(self._is_dark_theme())
+            vbar = tk.Scrollbar(
+                tab, orient="vertical", command=outer.yview,
+                bg=sc["bg"], troughcolor=sc["trough"], activebackground=sc["active"],
+                highlightthickness=0, bd=0,
+            )
+            self._analysis_vbars.append(vbar)
             outer.configure(yscrollcommand=vbar.set)
             vbar.pack(side="right", fill="y")
             outer.pack(side="left", fill="both", expand=True)
@@ -192,10 +210,14 @@ class AnalysisPageMixin:
             """Звичайний tk.Text БЕЗ власної смуги прокрутки -- на вкладці
             має бути лише один спільний вертикальний повзунок (від
             make_scroll_tab), а не по одному на кожен текстовий блок."""
-            return tk.Text(
+            c = MISSION_THEME_DARK if self._is_dark_theme() else MISSION_THEME_LIGHT
+            widget = tk.Text(
                 parent, wrap="word", font=("Consolas", 9), state="disabled",
                 height=height, width=1, relief="solid", borderwidth=1,
+                bg=c["table_bg"], fg=c["table_fg"], insertbackground=c["table_fg"],
             )
+            self._analysis_report_texts.append(widget)
+            return widget
 
         # --- «Зліт» = текст (погода), карта, профіль висоти зльоту ---
         takeoff_tab, takeoff_inner = make_scroll_tab("tab_takeoff")
@@ -206,7 +228,7 @@ class AnalysisPageMixin:
         takeoff_profile_box = ttk.LabelFrame(takeoff_inner)
         self._reg_i18n(takeoff_profile_box, "text", "box_takeoff_profile")
         takeoff_profile_box.pack(fill="x", pady=(0, 8))
-        self.takeoff_profile_canvas = tk.Canvas(takeoff_profile_box, bg="white", height=280)
+        self.takeoff_profile_canvas = tk.Canvas(takeoff_profile_box, bg=self._graph_canvas_bg(), height=280)
         self.takeoff_profile_canvas.pack(fill="x")
         self.takeoff_profile_canvas.bind("<Configure>", lambda e: self._redraw_takeoff_profile())
 
@@ -227,7 +249,15 @@ class AnalysisPageMixin:
         # (без зуму й без можливості редагування -- на відміну від «Місія»,
         # де планується редактор місії; спільна лише "чиста" математика
         # тайлів (compute_tile_bounds/fetch_tiles), сама відмальовка -- ні)
-        traj_map_box = ttk.LabelFrame(trajectory_inner, height=460)
+        #
+        # Висота -- self._viewport_h (та сама змінна, що й для карти на
+        # "Місія", рахується в _apply_viewport_heights під РЕАЛЬНИЙ
+        # розмір вікна) -- "екран на карту", а не мала фіксована коробка.
+        # Значення тут -- лише початковий запасний варіант (перше
+        # відкриття "Аналіз" до першого resize), далі підтримується
+        # синхронно з "Місія" в тій самій _apply_viewport_heights.
+        initial_viewport_h = getattr(self, "_viewport_h", None) or 700
+        traj_map_box = ttk.LabelFrame(trajectory_inner, height=initial_viewport_h)
         self._reg_i18n(traj_map_box, "text", "box_route_top_view")
         traj_map_box.pack(fill="x", pady=(0, 8))
         traj_map_box.pack_propagate(False)
@@ -236,38 +266,29 @@ class AnalysisPageMixin:
         # НЕ квадрат (на відміну від add_map_block вище/нижче -- ті
         # показують фіксовану площу 4x4 км навколо однієї точки, тому
         # квадрат для них і є правильною формою). Тут -- огляд усього
-        # маршруту, а render_route_overview масштабує мозаїку ЛИШЕ по
-        # ширині блока (без спроб підігнати ВИСОТУ traj_map_box під
-        # пропорції маршруту -- це виявилось ненадійним: висота
-        # доступного місця не гумова, і при найменшому розбіжності
-        # "contain"-вписування лишало сірі поля по боках). Висота
-        # блока лишається фіксованою (460px за замовчуванням). Без
-        # власного скролбара -- як і решта карт на "Аналіз" (add_map_block
-        # вище/нижче), прокрутка тільки одна, зовнішня, для всієї вкладки.
+        # маршруту: зум підбирається під РЕАЛЬНИЙ розмір цього канваса
+        # (_find_native_fit_zoom, той самий підхід, що й на "Місія" --
+        # GMap.NET/Mission Planner: кожен тайл окремо, 1:1, без склейки
+        # в мозаїку й без PIL.resize()). Без власного скролбара -- як і
+        # решта карт на "Аналіз" (add_map_block вище/нижче), прокрутка
+        # тільки одна, зовнішня, для всієї вкладки.
         self.trajectory_map_canvas = tk.Canvas(traj_map_box, bg="#cccccc", highlightthickness=0, bd=0)
         self.trajectory_map_canvas.pack(fill="both", expand=True)
         bind_pan(self.trajectory_map_canvas)
-        self._trajectory_map_params = None  # кеш (tiles, zoom, bounds) -- для перемальовки без повторного фетчу
+        self._trajectory_map_params = None  # кеш (tiles, zoom, bounds, center) -- для перемальовки без повторного фетчу
+        self._traj_map_resize_after_id = None
 
         def _on_traj_map_configure(event):
-            if self._trajectory_map_params is None:
-                return
-            tiles, zoom, tx_min, tx_max, ty_min, ty_max = self._trajectory_map_params
-            img_w, img_h = render_route_overview(
-                self.trajectory_map_canvas, self.analyzer, zoom,
-                tx_min, tx_max, ty_min, ty_max, tiles, self._trajectory_map_images,
-            )
-            # traj_map_box росте під реальну висоту карти при поточній
-            # ширині -- вкладка "Маршрут" сама прокручується зовні
-            # (make_scroll_tab), тому зайва висота тут не проблема, на
-            # відміну від "Місія", де немає зовнішньої прокрутки сторінки.
-            # верхня межа -- запобіжник від абсурдно високих зображень
-            # для маршрутів з екстремальним співвідношенням сторін
-            # (величезний діапазон широти при мізерному діапазоні
-            # довготи чи навпаки) -- тоді просто лишається трохи більше
-            # для прокрутки, ніж поміщається на екран, це прийнятний
-            # компроміс порівняно з десятками тисяч пікселів висоти
-            traj_map_box.configure(height=min(1600, max(200, img_h)))
+            # canvas змінив розмір (вікно потягнули) -- зум і діапазон
+            # тайлів залежать від розміру канваса, тому просто
+            # перераховуємо все заново через _load_trajectory_map()
+            # (дешево: переиспользує вже завантажені тайли, докачує
+            # лише недостаюче). Дебаунс -- той самий прийом, що й для
+            # resize карти на "Місія": під час активного розтягування
+            # вікна Configure сиплеться десятками подій на секунду.
+            if self._traj_map_resize_after_id is not None:
+                self.after_cancel(self._traj_map_resize_after_id)
+            self._traj_map_resize_after_id = self.after(150, self._load_trajectory_map)
 
         self._trajectory_map_images = []
         self.trajectory_map_canvas.bind("<Configure>", _on_traj_map_configure)
@@ -275,14 +296,16 @@ class AnalysisPageMixin:
         elev_box = ttk.LabelFrame(trajectory_inner)
         self._reg_i18n(elev_box, "text", "tab_elevation")
         elev_box.pack(fill="x", pady=(0, 8))
-        self.plot_canvas = tk.Canvas(elev_box, bg="white", height=320)
+        # "екран на кожен графік" -- та сама self._viewport_h, що й
+        # карта вище й карта на "Місія" (замість фіксованих 320px)
+        self.plot_canvas = tk.Canvas(elev_box, bg=self._graph_canvas_bg(), height=initial_viewport_h)
         self.plot_canvas.pack(fill="x")
         self.plot_canvas.bind("<Configure>", lambda e: self._redraw_plot())
 
         angle_box = ttk.LabelFrame(trajectory_inner)
         self._reg_i18n(angle_box, "text", "tab_angle")
         angle_box.pack(fill="x", pady=(0, 8))
-        self.angle_canvas = tk.Canvas(angle_box, bg="white", height=320)
+        self.angle_canvas = tk.Canvas(angle_box, bg=self._graph_canvas_bg(), height=initial_viewport_h)
         self.angle_canvas.pack(fill="x")
         self.angle_canvas.bind("<Configure>", lambda e: self._redraw_angle_plot())
 
@@ -294,7 +317,7 @@ class AnalysisPageMixin:
         landing_chart_box = ttk.LabelFrame(landing_inner)
         self._reg_i18n(landing_chart_box, "text", "box_glide_chart")
         landing_chart_box.pack(fill="x", pady=(0, 8))
-        self.landing_canvas = tk.Canvas(landing_chart_box, bg="white", height=300)
+        self.landing_canvas = tk.Canvas(landing_chart_box, bg=self._graph_canvas_bg(), height=300)
         self.landing_canvas.pack(fill="x")
         self.landing_canvas.bind("<Configure>", lambda e: self._redraw_landing_plot())
 
@@ -346,12 +369,15 @@ class AnalysisPageMixin:
         """Кнопка «Зберегти» на сторінці «Аналіз» -- зберігає весь звіт
         аналізу (Зліт/Траєкторія/Глісада) в PDF."""
         colors = self.palette
-        idle_bg, idle_fg = "#DEE3E8", colors["text"]
+        dark = colors.get("dark", False)
+        idle_bg = "#3a3a3a" if dark else "#DEE3E8"
+        idle_fg = colors["text"]
+        idle_active_bg = "#4a4a4a" if dark else "#C9CFD6"
         border = colors["border"]
 
         self.analysis_save_btn = tk.Button(
             parent, text=i18n.t("btn_save_pdf"),
-            bg=idle_bg, fg=idle_fg, activebackground="#C9CFD6", activeforeground=idle_fg,
+            bg=idle_bg, fg=idle_fg, activebackground=idle_active_bg, activeforeground=idle_fg,
             font=("Segoe UI", 9, "bold"), bd=2, relief="groove", cursor="hand2",
             padx=16, pady=6,
             highlightthickness=1, highlightbackground=border, highlightcolor=border,
@@ -388,7 +414,7 @@ class AnalysisPageMixin:
         if not path:
             return
 
-        images = self._capture_analysis_images()
+        images = self._capture_analysis_images_for_pdf()
 
         try:
             self._render_analysis_pdf(path, pdfcanvas, A4, mm, pdfmetrics, TTFont, ImageReader, images)
@@ -419,6 +445,50 @@ class AnalysisPageMixin:
             return ImageGrab.grab(bbox=(x, y, x + w, y + h))
         except Exception:
             return None
+
+
+    def _force_light_graphs_for_pdf(self) -> bool:
+        """Тимчасово перемикає 4 канваси графіків (профіль зльоту/висоти/
+        кута/глісади) на СВІТЛУ палітру перед знімком у PDF -- звіти
+        іноді друкують, тёмний фон на папері марно жере чорнило й
+        виглядає погано. Мапи (_meteo_canvases/trajectory_map_canvas) не
+        чіпаємо -- їх фон і так не залежить від теми (показують реальні
+        тайли карти, не колір інтерфейсу). Повертає True, якщо реально
+        щось перемикала (тема БУЛА темна) -- щоб знати, чи треба
+        повертати назад."""
+        if not self._is_dark_theme():
+            return False
+        for attr in ("plot_canvas", "angle_canvas", "landing_canvas", "takeoff_profile_canvas"):
+            canvas = getattr(self, attr, None)
+            if canvas is not None and canvas.winfo_exists():
+                canvas.configure(bg="white")
+        draw_elevation_profile(self.plot_canvas, self.analyzer, dark=False)
+        draw_takeoff_profile(self.takeoff_profile_canvas, self.analyzer, n_wps=3, dark=False)
+        draw_angle_profile(self.angle_canvas, self.analyzer, dark=False)
+        draw_landing_approach(self.landing_canvas, self.analyzer, dark=False)
+        self.update()
+        return True
+
+
+    def _restore_graphs_theme_after_pdf(self, was_forced: bool):
+        """Повертає графіки назад під поточну (темну) тему після знімку
+        для PDF -- інакше екран лишився б "застряглим" на світлих
+        графіках посеред темного інтерфейсу."""
+        if was_forced:
+            self._apply_analysis_theme()
+
+
+    def _capture_analysis_images_for_pdf(self) -> dict:
+        """Обгортка над _capture_analysis_images(): якщо зараз темна тема,
+        тимчасово перемикає ЛИШЕ графіки на світлу палітру перед знімком
+        (PDF-звіти іноді друкують -- темний фон на папері непрактичний),
+        і повертає їх назад одразу після, незалежно від того, вдався
+        знімок чи ні (finally)."""
+        was_forced = self._force_light_graphs_for_pdf()
+        try:
+            return self._capture_analysis_images()
+        finally:
+            self._restore_graphs_theme_after_pdf(was_forced)
 
 
     def _capture_analysis_images(self) -> dict:
@@ -645,7 +715,8 @@ class AnalysisPageMixin:
                 is_past = (d < today)
 
                 bg = self.palette["blue"] if is_sel else (
-                    "#E8ECEF" if is_past else "#DEE3E8"
+                    ("#3a3a3a" if self.palette.get("dark", False) else "#E8ECEF") if is_past
+                    else ("#3a3a3a" if self.palette.get("dark", False) else "#DEE3E8")
                 )
                 fg = self.palette["text_light"] if is_sel else (
                     "#AAAAAA" if is_past else self.palette["text"]
@@ -1019,11 +1090,27 @@ class AnalysisPageMixin:
 
 
     def _ensure_analysis_built(self):
-        """Лінива побудова важких елементів «Аналіз» (графіки, карта
-        маршруту) -- рахуються один раз, при першому реальному показі
-        вкладок, а не при кожному завантаженні місії на «Місія»."""
+        """Лінива побудова важких елементів «Аналіз» (аналіз місії,
+        графіки, карта маршруту) -- рахуються один раз, при першому
+        реальному показі вкладок (або повторно, якщо місію відредагували
+        в редакторі на "Місія" й позначили застарілою -- див.
+        mission_editor._run_reanalysis), а не при кожному завантаженні
+        місії чи кожній правці точки на "Місія"."""
         if getattr(self, "_analysis_built", False) or self.analyzer is None:
             return
+        # analyzer.analyze() -- сама важка перевірка (SRTM-запити на
+        # кожні 50м кожного відрізка маршруту) -- рахується САМЕ ТУТ,
+        # а не на "Місія": це єдине місце, де результат реально
+        # використовується (звіт нижче, підсвітка низького AGL на
+        # графіках). self._analyzed -- захист від повторного рахунку,
+        # якщо цю функцію викликали кілька разів поспіль без реальних
+        # змін місії між ними.
+        if not self.analyzer._analyzed:
+            self.analyzer.analyze()
+            self.status_var.set(
+                i18n.t("status_ready_fmt", n=len(self.analyzer.nav_wps), m=len(self.analyzer.issues))
+            )
+            self._distribute_report_text(self._captured_report())
         self._redraw_plot()
         self._redraw_takeoff_profile()
         self._redraw_angle_plot()
@@ -1128,66 +1215,181 @@ class AnalysisPageMixin:
         self._set_text_widget(self.glide_report_text, combined)
 
 
+    def _is_dark_theme(self) -> bool:
+        theme_var = getattr(self, "app_theme_var", None)
+        return theme_var.get() == "dark" if theme_var is not None else True
+
+
+    def _graph_canvas_bg(self) -> str:
+        """Фон канвасів графіків (профіль висоти/кута/глісади) -- майже
+        чорний у темній темі (не чистий "black", щоб не зливатись із
+        текстом-міткою "0" на сітці графіка), білий у світлій."""
+        return "#1a1a1a" if self._is_dark_theme() else "white"
+
+
+    def _apply_analysis_theme(self):
+        """Перефарбовує ВЖЕ ПОБУДОВАНУ сторінку "Аналіз" під поточну тему
+        -- викликається з app.py: apply_app_theme(). Canvas-фони не
+        підхоплюють зміну ttk.Style автоматично (bg= задається один раз
+        при створенні, це не ttk-стиль) -- перефарбовуємо явно й
+        перемальовуємо графіки з новими кольорами ліній/тексту."""
+        if not hasattr(self, "notebook"):
+            return  # сторінку ще не побудовано
+        bg = self.palette["bg"]
+        for outer in self._analysis_outer_canvases:
+            if outer.winfo_exists():
+                outer.configure(bg=bg)
+
+        sc = theme.slider_colors(self._is_dark_theme())
+        for vbar in self._analysis_vbars:
+            if vbar.winfo_exists():
+                vbar.configure(bg=sc["bg"], troughcolor=sc["trough"], activebackground=sc["active"])
+
+        c = MISSION_THEME_DARK if self._is_dark_theme() else MISSION_THEME_LIGHT
+        for text_widget in self._analysis_report_texts:
+            if text_widget.winfo_exists():
+                text_widget.configure(bg=c["table_bg"], fg=c["table_fg"], insertbackground=c["table_fg"])
+
+        graph_bg = self._graph_canvas_bg()
+        for attr in ("plot_canvas", "angle_canvas", "landing_canvas", "takeoff_profile_canvas"):
+            canvas = getattr(self, attr, None)
+            if canvas is not None and canvas.winfo_exists():
+                canvas.configure(bg=graph_bg)
+
+        # кнопки "Зберегти PDF" і вибору дати -- звичайні tk.Button з
+        # кольором, "заскленим" при створенні (не ttk.Style) -- без цього
+        # лишились би зі старими кольорами (той самий баг "світлий текст
+        # на світлому фоні", що й у _make_toggle_action_buttons).
+        dark = self.palette.get("dark", False)
+        idle_bg = "#3a3a3a" if dark else "#DEE3E8"
+        idle_active_bg = "#4a4a4a" if dark else "#C9CFD6"
+        if hasattr(self, "analysis_save_btn") and self.analysis_save_btn.winfo_exists():
+            self.analysis_save_btn.configure(
+                bg=idle_bg, fg=self.palette["text"],
+                activebackground=idle_active_bg, activeforeground=self.palette["text"],
+                highlightbackground=self.palette["border"], highlightcolor=self.palette["border"],
+            )
+        if hasattr(self, "_date_btn") and self._date_btn.winfo_exists():
+            self._date_btn.configure(
+                bg=idle_bg, fg=self.palette["text"], highlightbackground=self.palette["border"],
+            )
+
+        if self.analyzer is not None:
+            self._redraw_plot()
+            self._redraw_takeoff_profile()
+            self._redraw_angle_plot()
+            self._redraw_landing_plot()
+
+
     def _redraw_plot(self):
-        draw_elevation_profile(self.plot_canvas, self.analyzer)
+        draw_elevation_profile(self.plot_canvas, self.analyzer, dark=self._is_dark_theme())
 
 
     def _redraw_takeoff_profile(self):
-        draw_takeoff_profile(self.takeoff_profile_canvas, self.analyzer, n_wps=3)
+        draw_takeoff_profile(self.takeoff_profile_canvas, self.analyzer, n_wps=3, dark=self._is_dark_theme())
 
 
     def _redraw_angle_plot(self):
-        draw_angle_profile(self.angle_canvas, self.analyzer)
+        draw_angle_profile(self.angle_canvas, self.analyzer, dark=self._is_dark_theme())
 
 
     def _redraw_landing_plot(self):
-        draw_landing_approach(self.landing_canvas, self.analyzer)
+        draw_landing_approach(self.landing_canvas, self.analyzer, dark=self._is_dark_theme())
 
     # -------------------------------------------------------------- карта --
 
 
     def _load_trajectory_map(self):
-        """Завантажує карту всього маршруту для вкладки «Траєкторія».
+        """Показує карту всього маршруту для вкладки «Траєкторія».
 
-        Зум -- саме той, що автоматично порахувався один раз при
-        завантаженні місії на "Місія" (self._initial_auto_zoom,
-        встановлюється в render_map(auto_zoom=True) в mission_page.py),
-        а не self.zoom_var (те можна покрутити вручну колесом миші на
-        "Місія" вже ПІСЛЯ завантаження -- "Маршрут" на це реагувати не
-        повинен) і не окремий підбір під власний канвас (просто зайва
-        складність без потреби).
+        Зум підбирається ОКРЕМО під власний канвас цієї вкладки (той
+        самий метод, що й на "Місія" -- _find_native_fit_zoom, підхід
+        GMap.NET/Mission Planner), а не переиспользується з "Місія": їхні
+        канваси різного розміру, тому й зум має бути свій. Малюється
+        так само тайл-за-тайлом (render_viewport), БЕЗ склейки в мозаїку
+        й без PIL.resize() -- та сама причина, що й на "Місія" (це і
+        було головним гальмом, ~1 секунда на відмальовку).
+
+        Переиспользує сирі тайли, вже завантажені на "Місія" (self.
+        _last_map_render["tiles"]) -- докачує мережею ЛИШЕ ті координати,
+        яких там немає. Аналіз і так важкий процес (перевірка висоти над
+        рельєфом по SRTM), тому економія на повторному скачуванні тих
+        самих тайлів карти тут особливо доречна.
         """
         if self.analyzer is None or not hasattr(self, "trajectory_map_canvas"):
             return
 
-        zoom = getattr(self, "_initial_auto_zoom", None)
+        canvas = self.trajectory_map_canvas
+        canvas.update_idletasks()
+        canvas_w = max(canvas.winfo_width(), 100)
+        # висота блока фіксована (traj_map_box, height=460 за
+        # замовчуванням, pack_propagate(False)) -- берем РЕАЛЬНУ поточну
+        # висоту канваса як ціль підбору зуму, а не жорстко 460, щоб
+        # коректно підлаштовуватись, якщо блок колись матиме інший розмір
+        canvas_h = max(canvas.winfo_height(), 100)
+
+        zoom = self._find_native_fit_zoom(canvas_w, canvas_h)
         if zoom is None:
-            zoom = int(self.zoom_var.get())
-        tx_min, tx_max, ty_min, ty_max, total = compute_tile_bounds(self.analyzer, zoom)
+            return
+
+        nav_wps = self.analyzer.nav_wps
+        if not nav_wps:
+            return
+        # той самий принцип, що й на "Місія" -- геометричний ЦЕНТР
+        # РАМКИ маршруту, не центроїд (середнє координат точок): при
+        # нерівномірному розподілі точок центроїд зміщується і
+        # обрізає маршрут з одного боку, навіть якщо розмір "влазить"
+        lats = [wp.lat for wp in nav_wps]
+        lons = [wp.lon for wp in nav_wps]
+        center_lat = (min(lats) + max(lats)) / 2
+        center_lon = (min(lons) + max(lons)) / 2
+        tx_min, tx_max, ty_min, ty_max = compute_viewport_tile_bounds(
+            center_lat, center_lon, zoom, canvas_w, canvas_h, buffer_factor=1.0,
+        )
 
         if self.tile_cache is None:
             disk_cache = self.tilecache_var.get().strip() or None
             self.tile_cache = OnlineTileCache(provider=self.provider_key, disk_cache_dir=disk_cache)
 
+        # тайли, вже наявні з "Місія" (той самий zoom) -- незалежно від
+        # режиму ("overview"/"viewport", обидва тепер малюються
+        # тайл-за-тайлом, і в обох _last_map_render["tiles"] містить
+        # сирі байти за координатами)
+        reused_tiles: dict = {}
+        last = getattr(self, "_last_map_render", None)
+        if last is not None and last.get("zoom") == zoom:
+            reused_tiles = last.get("tiles", {})
+
+        needed_coords = [
+            (tx, ty)
+            for tx in range(tx_min, tx_max + 1)
+            for ty in range(ty_min, ty_max + 1)
+        ]
+        missing_coords = [c for c in needed_coords if c not in reused_tiles]
+
         def worker():
-            tiles, _cancelled = fetch_tiles(self.tile_cache, tx_min, tx_max, ty_min, ty_max, zoom)
-            self.after(0, lambda: self._on_trajectory_map_ready(tiles, zoom, tx_min, tx_max, ty_min, ty_max))
+            tiles = {c: reused_tiles[c] for c in needed_coords if c in reused_tiles}
+            if missing_coords:
+                fetched, _cancelled = fetch_tiles(
+                    self.tile_cache, tx_min, tx_max, ty_min, ty_max, zoom,
+                    coords=missing_coords,
+                )
+                tiles.update(fetched)
+            self.after(
+                0,
+                lambda: self._on_trajectory_map_ready(
+                    tiles, zoom, tx_min, tx_max, ty_min, ty_max, center_lat, center_lon,
+                ),
+            )
 
         threading.Thread(target=worker, daemon=True).start()
 
 
-    def _on_trajectory_map_ready(self, tiles, zoom, tx_min, tx_max, ty_min, ty_max):
-        self._trajectory_map_params = (tiles, zoom, tx_min, tx_max, ty_min, ty_max)
-        img_w, img_h = render_route_overview(
-            self.trajectory_map_canvas, self.analyzer, zoom,
+    def _on_trajectory_map_ready(self, tiles, zoom, tx_min, tx_max, ty_min, ty_max, center_lat, center_lon):
+        self._trajectory_map_params = (tiles, zoom, tx_min, tx_max, ty_min, ty_max, center_lat, center_lon)
+        render_viewport(
+            self.trajectory_map_canvas, self.analyzer, zoom, center_lat, center_lon,
             tx_min, tx_max, ty_min, ty_max, tiles, self._trajectory_map_images,
         )
-        # верхня межа -- запобіжник від абсурдно високих зображень
-        # для маршрутів з екстремальним співвідношенням сторін
-        # (величезний діапазон широти при мізерному діапазоні
-        # довготи чи навпаки) -- тоді просто лишається трохи більше
-        # для прокрутки, ніж поміщається на екран, це прийнятний
-        # компроміс порівняно з десятками тисяч пікселів висоти
-        self._traj_map_box.configure(height=min(1600, max(200, img_h)))
 
 
