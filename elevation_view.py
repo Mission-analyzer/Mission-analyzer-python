@@ -13,10 +13,28 @@ from analyzer import MissionAnalyzer
 import i18n
 
 
+import theme
+
+
+def _colors(dark: bool) -> dict:
+    # усі значення -- з ЄДИНОГО джерела (theme.chart_colors), лише
+    # перейменовані під локальні назви, які вже використовує код
+    # відмальовки нижче (щоб не переписувати кожен виклик create_*)
+    cc = theme.chart_colors(dark)
+    return {
+        "grid_y": cc["grid"], "grid_x": cc["grid_minor"],
+        "text": cc["text"],
+        "terrain_line": cc["line_terrain"],
+        "low_agl": "#aa3333" if dark else "#ff9999",
+        "mission_line": cc["line_primary"],
+        "angle_dash": cc["muted"], "angle_text": cc["text"],
+    }
+
+
 def draw_elevation_profile(
     canvas: tk.Canvas, analyzer: MissionAnalyzer, step_m: float = 50.0,
     max_dist_m: float | None = None, title: str | None = None,
-    show_angles: bool = False,
+    show_angles: bool = False, dark: bool = False,
 ):
     """
     Полностью перерисовывает canvas профилем высоты текущей миссии.
@@ -24,11 +42,15 @@ def draw_elevation_profile(
     де потрібні лише перші кілька точок, а не весь маршрут).
     Якщо show_angles=True -- додає вертикальні пунктирні лінії по
     точках і підписи кута підйому/зниження між ними (як на «Посадка»).
+    dark -- палітра для темної теми (canvas.bg встановлюється ЗОВНІ,
+    цей параметр лише підбирає кольори ліній/тексту, щоб лишались
+    видимими на темному тлі).
     """
     canvas.delete("all")
     if analyzer is None:
         return
 
+    c = _colors(dark)
     width = max(canvas.winfo_width(), 200)
     height = max(canvas.winfo_height(), 150)
 
@@ -62,7 +84,7 @@ def draw_elevation_profile(
             needed_top = leg_rows_top + n_segs * row_h + 6
         margin_t = max(margin_t, needed_top)
 
-    margin_l, margin_r, margin_b = 55, 15, 35
+    margin_l, margin_r, margin_b = 55, 15, 42
     plot_w = max(width - margin_l - margin_r, 10)
     plot_h = max(height - margin_t - margin_b, 10)
 
@@ -90,23 +112,34 @@ def draw_elevation_profile(
     for i in range(6):
         val = y_min + (y_max - y_min) * i / 5
         y = Y(val)
-        canvas.create_line(margin_l, y, width - margin_r, y, fill="#e0e0e0")
-        canvas.create_text(margin_l - 6, y, text=f"{val:.0f}", anchor="e", font=("Arial", 8))
+        canvas.create_line(margin_l, y, width - margin_r, y, fill=c["grid_y"])
+        canvas.create_text(margin_l - 6, y, text=f"{val:.0f}", anchor="e", font=("Arial", 8), fill=c["text"])
+    canvas.create_text(
+        margin_l, max(margin_t - 6, 6), text=i18n.t("unit_meters_axis"),
+        anchor="s", font=("Arial", 7), fill=c["text"],
+    )
 
     for i in range(7):
         val = x_min + (x_max - x_min) * i / 6
         x = X(val)
-        canvas.create_line(x, margin_t, x, height - margin_b, fill="#f0f0f0")
-        canvas.create_text(x, height - margin_b + 14, text=f"{val:.0f}", anchor="n", font=("Arial", 8))
+        canvas.create_line(x, margin_t, x, height - margin_b, fill=c["grid_x"])
+        canvas.create_text(x, height - margin_b + 14, text=f"{val:.1f}", anchor="n", font=("Arial", 8), fill=c["text"])
+    canvas.create_text(
+        width / 2, height - margin_b + 26, text=i18n.t("unit_km_axis"),
+        anchor="n", font=("Arial", 7), fill=c["text"],
+    )
 
-    # рельеф (заливка) + подсветка зон низкого AGL
+    # рельєф -- лише лінія, без заливки (та сама логіка, що й на
+    # "Місія": просто графік рельєфу, без "плями" під ним) + підсвітка
+    # зон низького AGL
     if has_terrain:
-        floor_y = Y(y_min)
-        poly = [(X(d), Y(t)) for d, t in zip(dist_km, terrain_vals) if t is not None]
-        if poly:
-            pts = [(X(dist_km[0]), floor_y)] + poly + [(X(dist_km[-1]), floor_y)]
-            flat = [c for p in pts for c in p]
-            canvas.create_polygon(*flat, fill="#c9a27a", outline="#5C3A1E")
+        line_pts = []
+        for d, t in zip(dist_km, terrain_vals):
+            if t is None:
+                continue
+            line_pts.extend([X(d), Y(t)])
+        if len(line_pts) >= 4:
+            canvas.create_line(*line_pts, fill=c["terrain_line"], width=2)
 
         low = [
             (m is not None and t is not None and (m - t) < analyzer.alt_min)
@@ -121,7 +154,7 @@ def draw_elevation_profile(
                 x1, x2 = X(dist_km[i]), X(dist_km[min(j, len(low) - 1)])
                 canvas.create_rectangle(
                     x1, margin_t, x2, height - margin_b,
-                    fill="#ff9999", outline="", stipple="gray50",
+                    fill=c["low_agl"], outline="", stipple="gray50",
                 )
                 i = j
             else:
@@ -130,14 +163,14 @@ def draw_elevation_profile(
     # линия высоты миссии
     pts = [(X(d), Y(m)) for d, m in zip(dist_km, mission_vals) if m is not None]
     for i in range(len(pts) - 1):
-        canvas.create_line(*pts[i], *pts[i + 1], fill="#1f77b4", width=2)
+        canvas.create_line(*pts[i], *pts[i + 1], fill=c["mission_line"], width=2)
 
     # вертикальні пунктирні лінії по точках + підписи кута підйому/зниження
     # між ними -- як на графіку глісади (тільки при show_angles=True)
     if show_angles:
         for d, a, seq in valid_wps:
             x = X(d / 1000)
-            canvas.create_line(x, margin_t, x, height - margin_b, fill="#cccccc", dash=(2, 2))
+            canvas.create_line(x, margin_t, x, height - margin_b, fill=c["angle_dash"], dash=(2, 2))
 
         for i in range(len(valid_wps) - 1):
             d1, a1, seq1 = valid_wps[i]
@@ -149,7 +182,7 @@ def draw_elevation_profile(
             row_y = leg_rows_top + i * row_h
             canvas.create_text(
                 xm, row_y, text=f"{angle_deg:+.1f}°",
-                font=("Arial", 8), fill="#333333",
+                font=("Arial", 8), fill=c["angle_text"],
             )
 
     # точки waypoint'ов
@@ -157,13 +190,19 @@ def draw_elevation_profile(
         if a is None:
             continue
         x, y = X(d / 1000), Y(a)
-        canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill="red", outline="")
-        canvas.create_text(x, y - 10, text=str(seq), font=("Arial", 8))
+        canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill=c["mission_line"], outline="")
+        canvas.create_text(x, y - 10, text=str(seq), font=("Arial", 8), fill=c["text"])
 
-    canvas.create_text(width / 2, 12, text=title or i18n.t("title_elevation_profile"), font=("Arial", 11, "bold"))
+    canvas.create_text(
+        width / 2, 12, text=title or i18n.t("title_elevation_profile"),
+        font=("Arial", 11, "bold"), fill=c["text"],
+    )
 
 
-def draw_takeoff_profile(canvas: tk.Canvas, analyzer: MissionAnalyzer, n_wps: int = 3, step_m: float = 10.0):
+def draw_takeoff_profile(
+    canvas: tk.Canvas, analyzer: MissionAnalyzer, n_wps: int = 3, step_m: float = 10.0,
+    dark: bool = False,
+):
     """
     Профіль висоти лише для зльоту: точка старту + перші n_wps точок
     маршруту (детальніше, ніж загальний профіль -- крок 10 м замість 50).
@@ -194,5 +233,5 @@ def draw_takeoff_profile(canvas: tk.Canvas, analyzer: MissionAnalyzer, n_wps: in
 
     draw_elevation_profile(
         canvas, analyzer, step_m=step_m, max_dist_m=max_dist,
-        title="Профіль висоти — зліт", show_angles=True,
+        title="Профіль висоти — зліт", show_angles=True, dark=dark,
     )
