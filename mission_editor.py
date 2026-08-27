@@ -128,10 +128,12 @@ class MissionEditorMixin:
         self.map_canvas.bind("<Button-3>", self._on_map_right_click)
 
         # профіль висот: перетягування маркера точки по вертикалі -- міняє
-        # лише висоту (X/дистанція не чіпається)
+        # лише висоту (X/дистанція не чіпається); правий клік -- додає
+        # нову точку в місце маршруту під X-координатою кліку
         self.alt_profile_canvas.bind("<ButtonPress-1>", self._on_alt_press_edit)
         self.alt_profile_canvas.bind("<B1-Motion>", self._on_alt_motion_edit)
         self.alt_profile_canvas.bind("<ButtonRelease-1>", self._on_alt_release_edit)
+        self.alt_profile_canvas.bind("<Button-3>", self._on_alt_right_click)
 
         self._enable_table_editing()
 
@@ -156,7 +158,10 @@ class MissionEditorMixin:
         self.alt_profile_canvas.unbind("<ButtonPress-1>")
         self.alt_profile_canvas.unbind("<B1-Motion>")
         self.alt_profile_canvas.unbind("<ButtonRelease-1>")
+        self.alt_profile_canvas.unbind("<Button-3>")
         self._alt_drag = None
+        self._alt_zoom_drag = None
+        self.alt_profile_canvas.delete("zoom_select_rect")
 
         self._disable_table_editing()
 
@@ -324,14 +329,26 @@ class MissionEditorMixin:
         self._redraw_last_map_render()
 
 
-    def _get_terrain_profile(self):
+    def _get_terrain_profile(self, start_dist: float | None = None, end_dist: float | None = None):
         """Кешовані зразки рельєфу [(dist_м, elevation_AMSL_м), ...] вздовж
         маршруту -- рахуються ОДИН РАЗ на конкретну геометрію точок
-        (lat/lon), а не на кожен кадр перетягування ВИСОТИ -- рельєф не
-        залежить від того, яку висоту польоту тягне користувач, лише від
-        позицій точок. Кеш явно скидається, коли позиції реально
-        змінюються (див. route_key). Повертає (samples, total_dist);
-        samples=None, якщо SRTM не підключено."""
+        (lat/lon) І конкретний видимий діапазон, а не на кожен кадр
+        перетягування ВИСОТИ -- рельєф не залежить від того, яку висоту
+        польоту тягне користувач, лише від позицій точок і того, який
+        відрізок маршруту зараз показано. Кеш явно скидається, коли
+        позиції реально змінюються (route_key) чи змінюється видимий
+        діапазон (range_key).
+
+        start_dist/end_dist -- None означає "весь маршрут" (як і
+        раніше). Якщо задано (напр. поточний зум графіка висот,
+        _alt_zoom_range) -- ті самі ~600 семплів розподіляються РІВНОМІРНО
+        в МЕЖАХ ЦЬОГО діапазону, а не по всій довжині маршруту -- принцип
+        лупи: чим сильніший зум (менший видимий відрізок), тим щільніше
+        (за метром вздовж маршруту) семпли рельєфу на цій самій ділянці,
+        а не ті самі рідкі точки, розтягнуті на весь екран.
+
+        Повертає (samples, total_dist); samples=None, якщо SRTM не
+        підключено."""
         if self.analyzer is None or self.analyzer.terrain is None:
             return None, 0.0
         nav_wps = self.analyzer.nav_wps
@@ -339,9 +356,6 @@ class MissionEditorMixin:
             return None, 0.0
 
         route_key = tuple((wp.lat, wp.lon) for wp in nav_wps)
-        cache = getattr(self, "_terrain_profile_cache", None)
-        if cache is not None and cache.get("route_key") == route_key:
-            return cache["samples"], cache["total_dist"]
 
         dists = [0.0]
         for i in range(1, len(nav_wps)):
@@ -349,14 +363,34 @@ class MissionEditorMixin:
             dists.append(dists[-1] + d)
         total_dist = dists[-1] if dists[-1] > 0 else 1.0
 
-        # ~1 зразок на 15м, до 600 точок -- більша дискретність рельєфу
-        # (раніше було 50м/150, тепер значно щільніше). SRTM-запити після
-        # завантаження тайлу в пам'ять -- просто пошук у масиві, тому
-        # більша щільність не б'є по швидкості так, як мережевий запит
-        n_samples = int(min(600, max(len(nav_wps), total_dist // 15 + 1)))
+        range_start = 0.0 if start_dist is None else max(0.0, start_dist)
+        range_end = total_dist if end_dist is None else min(total_dist, end_dist)
+        if range_end <= range_start:
+            range_start, range_end = 0.0, total_dist
+        range_key = (round(range_start, 1), round(range_end, 1))
+
+        cache = getattr(self, "_terrain_profile_cache", None)
+        if cache is not None and cache.get("route_key") == route_key and cache.get("range_key") == range_key:
+            return cache["samples"], cache["total_dist"]
+
+        range_span = range_end - range_start
+
+        # ФІКСОВАНА кількість семплів (до 600) НЕЗАЛЕЖНО від довжини
+        # видимого діапазону -- принцип лупи: скільки точок рельєфу
+        # видно НА ЕКРАНІ має лишатись приблизно постійним, чим сильніший
+        # зум (менший видимий відрізок) -- тим ЩІЛЬНІШЕ (за метром)
+        # семпли саме на цій ділянці, а не розтягнуті рідкісні точки з
+        # усього маршруту. Верхня межа -- ще й max(2, int(range_span)):
+        # не більше 1 точки на метр -- семплувати частіше немає сенсу,
+        # роздільна здатність SRTM однаково ~90м/піксель. SRTM-запити
+        # після завантаження тайлу в пам'ять -- просто пошук у масиві,
+        # тому більша щільність не б'є по швидкості так, як мережевий
+        # запит (виміряно окремо -- див. чат: ~2мс на 600 запитів у вже
+        # завантаженому тайлі).
+        n_samples = int(min(600, max(2, range_span)))
         samples = []
         for i in range(n_samples + 1):
-            target_d = total_dist * i / n_samples
+            target_d = range_start + range_span * i / n_samples
             seg = 0
             while seg < len(dists) - 2 and dists[seg + 1] < target_d:
                 seg += 1
@@ -373,7 +407,10 @@ class MissionEditorMixin:
                 elev = None
             samples.append((target_d, elev))
 
-        self._terrain_profile_cache = {"route_key": route_key, "samples": samples, "total_dist": total_dist}
+        self._terrain_profile_cache = {
+            "route_key": route_key, "range_key": range_key,
+            "samples": samples, "total_dist": total_dist,
+        }
         return samples, total_dist
 
 
@@ -401,7 +438,15 @@ class MissionEditorMixin:
         порівнювати висоту точки нема з чим -- сенс профілю пропадає,
         тому за відсутності SRTM явно попереджаємо, а не мовчки ховаємо.
         Маркери -- ті самі точки, що й на карті, з тегами
-        alt_marker_<index> для перетягування по вертикалі в редакторі."""
+        alt_marker_<index> для перетягування по вертикалі в редакторі.
+
+        self._alt_zoom_range -- (dist_start, dist_end) у метрах уздовж
+        маршруту, якщо користувач виділив прямокутник лівою кнопкою
+        (_on_alt_release_edit) -- None означає "весь маршрут". X-вісь
+        мапить САМЕ цей видимий діапазон на ширину канваса (не завжди
+        [0, total_dist]), і v_min/v_max (авто-масштаб висоти) рахуються
+        ЛИШЕ з даних, що потрапляють у цей діапазон -- інакше зумована
+        ділянка не виглядала б детальнішою, лише вужчою по горизонталі."""
         canvas = self.alt_profile_canvas
         canvas.delete("all")
         self._alt_profile_geom = None
@@ -430,14 +475,36 @@ class MissionEditorMixin:
             a = self.analyzer._absolute_alt(wp)
             flight_amsl.append(a if a is not None else wp.alt)
 
-        terrain_samples, _terrain_total = self._get_terrain_profile()
+        # видимий діапазон (весь маршрут, чи активний зум) -- ВАЖЛИВО:
+        # перевіряємо, що збережений діапазон досі коректний (напр. якщо
+        # маршрут став коротшим після видалення точок -- старий zoom_end
+        # міг вийти за нові межі). Рахуємо ДО _get_terrain_profile --
+        # передаємо його туди, щоб рельєф семплювався щільніше саме на
+        # цьому видимому відрізку (принцип лупи), а не по всьому маршруту.
+        if self._alt_zoom_range is not None:
+            view_start = max(0.0, min(self._alt_zoom_range[0], total_dist))
+            view_end = max(view_start + 1.0, min(self._alt_zoom_range[1], total_dist))
+        else:
+            view_start, view_end = 0.0, total_dist
+        view_span = view_end - view_start
 
-        all_values = list(flight_amsl)
+        terrain_samples, _terrain_total = self._get_terrain_profile(view_start, view_end)
+
+        # v_min/v_max -- ЛИШЕ з даних, що потрапляють у видимий діапазон
+        # (інакше зум по X не давав би деталізації по висоті теж)
+        visible_values = [
+            a for d, a in zip(dists, flight_amsl) if view_start - 1e-6 <= d <= view_end + 1e-6
+        ]
         if terrain_samples:
-            all_values += [e for _d, e in terrain_samples if e is not None]
-        if not all_values:
-            return
-        v_min, v_max = min(all_values), max(all_values)
+            visible_values += [
+                e for d, e in terrain_samples
+                if e is not None and view_start - 1e-6 <= d <= view_end + 1e-6
+            ]
+        if not visible_values:
+            # діапазон зуму випадково не містить жодної точки/семпла --
+            # запасний варіант, щоб не впасти на порожньому min()/max()
+            visible_values = list(flight_amsl) or [0.0]
+        v_min, v_max = min(visible_values), max(visible_values)
         if v_max - v_min < 1e-6:
             v_max = v_min + 1.0
         pad = (v_max - v_min) * 0.15
@@ -445,7 +512,7 @@ class MissionEditorMixin:
         v_max += pad
 
         def X(d):
-            return margin_l + d / total_dist * plot_w
+            return margin_l + (d - view_start) / view_span * plot_w
 
         def Y(v):
             return margin_t + (1 - (v - v_min) / (v_max - v_min)) * plot_h
@@ -483,6 +550,9 @@ class MissionEditorMixin:
         points_px = [(X(d), Y(a), wp) for d, a, wp in zip(dists, flight_amsl, nav_wps)]
 
         # лінія польоту (AMSL) -- червона, як графік висоти в Mission Planner
+        # (малюємо навіть сегменти, що частково/повністю виходять за межі
+        # видимого діапазону -- Tkinter сам коректно показує лише видиму
+        # частину, зайве просто не потрапляє в канвас)
         for i in range(len(points_px) - 1):
             x1, y1, wp1 = points_px[i]
             x2, y2, wp2 = points_px[i + 1]
@@ -503,11 +573,13 @@ class MissionEditorMixin:
             )
 
         # нижня вісь -- сама лінія + позначки-риски + підписи в кілометрах
+        # (від view_start до view_end -- при активному зумі перша й
+        # остання риска НЕ обов'язково 0 і total_dist)
         axis_y = margin_t + plot_h
         canvas.create_line(margin_l, axis_y, w - margin_r, axis_y, fill=c["alt_axis_line"], width=1)
         n_ticks = 5
         for i in range(n_ticks + 1):
-            d = total_dist * i / n_ticks
+            d = view_start + view_span * i / n_ticks
             x_tick = X(d)
             canvas.create_line(x_tick, axis_y, x_tick, axis_y + 4, fill=c["alt_axis_line"])
             canvas.create_text(
@@ -517,10 +589,54 @@ class MissionEditorMixin:
             w / 2, axis_y + 16, text=i18n.t("unit_km_axis"), anchor="n", font=("Arial", 7), fill=c["alt_unit_label"],
         )
 
-        self._alt_profile_geom = {"margin_t": margin_t, "plot_h": plot_h, "v_min": v_min, "v_max": v_max}
+        # margin_l/plot_w/view_start/view_span/dists/nav_wps -- потрібні
+        # для ПРАВОГО кліку (додавання нової точки) і для виділення
+        # прямокутника зуму лівою кнопкою: переводять X-координату кліку
+        # назад у дистанцію вздовж маршруту, З УРАХУВАННЯМ поточного
+        # видимого діапазону (не завжди [0, total_dist]).
+        # -> між якими двома сусідніми точками ця відстань потрапляє ->
+        # lat/lon лінійною інтерполяцією між ними за часткою відстані.
+        self._alt_profile_geom = {
+            "margin_t": margin_t, "plot_h": plot_h, "v_min": v_min, "v_max": v_max,
+            "margin_l": margin_l, "plot_w": plot_w, "total_dist": total_dist,
+            "view_start": view_start, "view_span": view_span,
+            "dists": dists, "nav_wps": nav_wps,
+        }
+
+        # Числовий зум графіка -- відношення ВСЬОГО маршруту до
+        # ВИДИМОГО (view_span) відрізка, округлене до цілого. Весь
+        # маршрут видно -> view_span == total_dist -> зум = 1 (початкове
+        # значення). Користувач виділив (зумив) третину маршруту ->
+        # view_span = total_dist/3 -> зум = round(3) = 3. Виділив ще раз,
+        # усередині вже зумленого (view_span стає ще меншим відносно
+        # ТОГО САМОГО total_dist) -> зум ще зростає -- послідовний зум
+        # природно накопичується сам, без окремого лічильника "скільки
+        # разів зумили", просто через відношення поточного view_span до
+        # незмінного total_dist.
+        if hasattr(self, "_alt_zoom_label"):
+            zoom_value = round(total_dist / view_span) if view_span > 1e-6 else 1
+            self._alt_zoom_label.configure(text=str(max(1, zoom_value)))
 
 
     def _on_alt_press_edit(self, event):
+        """Ліва кнопка на графіку висот -- ДВІ різні дії залежно від
+        того, куди влучив клік:
+        - на маркер існуючої точки -> перетягування цієї точки (як
+          вертикально -- висота, так і горизонтально -- позиція вздовж
+          ПРЯМОЇ між сусідніми точками маршруту, self._alt_drag);
+        - на порожнє місце графіка -> починаємо виділення прямокутника
+          зуму (self._alt_zoom_drag) -- малюється в _on_alt_motion_edit,
+          застосовується в _on_alt_release_edit.
+
+        prev_wp/next_wp/dist_prev/dist_next -- зберігаються ОДИН раз тут,
+        на момент натискання, а НЕ перераховуються на кожен кадр motion:
+        самі dists у geom змінюються при кожній перемальовці (бо lat/lon
+        точки, що рухається, вже інші) -- якщо брати сусідів заново на
+        кожен кадр, межі "між ким рухати" самі "пливли" б під час
+        перетягування. Перша/остання точка маршруту не має сусіда з
+        одного боку -- горизонтальне перетягування для них не
+        застосовується (нема прямої, вздовж якої рухати), лишається
+        тільки вертикальне (висота), як і раніше."""
         item = self.alt_profile_canvas.find_closest(event.x, event.y)
         tags = self.alt_profile_canvas.gettags(item) if item else ()
         wp_index = None
@@ -528,34 +644,186 @@ class MissionEditorMixin:
             if t.startswith("alt_marker_"):
                 wp_index = int(t.rsplit("_", 1)[-1])
                 break
-        if wp_index is not None and self._wp_by_index(wp_index) is not None:
-            self._alt_drag = {"wp_index": wp_index}
+        wp = self._wp_by_index(wp_index) if wp_index is not None else None
+        if wp is not None:
+            prev_wp = next_wp = None
+            dist_prev = dist_next = None
+            geom = self._alt_profile_geom
+            if geom is not None:
+                nav_wps = geom["nav_wps"]
+                dists = geom["dists"]
+                for pos, w in enumerate(nav_wps):
+                    if w is wp:
+                        if pos > 0:
+                            prev_wp, dist_prev = nav_wps[pos - 1], dists[pos - 1]
+                        if pos < len(nav_wps) - 1:
+                            next_wp, dist_next = nav_wps[pos + 1], dists[pos + 1]
+                        break
+            self._alt_drag = {
+                "wp_index": wp_index,
+                "prev_wp": prev_wp, "next_wp": next_wp,
+                "dist_prev": dist_prev, "dist_next": dist_next,
+            }
+            self._alt_zoom_drag = None
         else:
             self._alt_drag = None
+            if self._alt_profile_geom is not None:
+                self._alt_zoom_drag = {"start_x": event.x}
 
 
     def _on_alt_motion_edit(self, event):
-        if self._alt_drag is None or self._alt_profile_geom is None:
+        if self._alt_drag is not None:
+            if self._alt_profile_geom is None:
+                return
+            drag = self._alt_drag
+            wp = self._wp_by_index(drag["wp_index"])
+            if wp is None:
+                return
+            geom = self._alt_profile_geom
+
+            # вертикаль -- висота (як і раніше)
+            y = max(geom["margin_t"], min(event.y, geom["margin_t"] + geom["plot_h"]))
+            frac_y = 1 - (y - geom["margin_t"]) / geom["plot_h"]
+            new_amsl = geom["v_min"] + frac_y * (geom["v_max"] - geom["v_min"])
+            wp.alt = self._amsl_to_relative_alt(wp, new_amsl)
+
+            # горизонталь -- позиція ВЗДОВЖ ПРЯМОЇ між сусідніми точками
+            # (та сама лінійна інтерполяція, що й у _add_waypoint_row)
+            # -- лише якщо ОБИДВА сусіди існують (перша/остання точка
+            # маршруту -- лише вертикаль)
+            if drag["prev_wp"] is not None and drag["next_wp"] is not None:
+                click_dist = self._alt_click_to_dist(event, geom)
+                span = drag["dist_next"] - drag["dist_prev"]
+                t = (click_dist - drag["dist_prev"]) / span if span > 1e-9 else 0.5
+                # невеликий відступ від самих сусідів (2%..98%) -- щоб
+                # точка не "злипалась" точно в ту саму позицію, що й сусід
+                t = max(0.02, min(0.98, t))
+                prev_wp, next_wp = drag["prev_wp"], drag["next_wp"]
+                wp.lat = prev_wp.lat + (next_wp.lat - prev_wp.lat) * t
+                wp.lon = prev_wp.lon + (next_wp.lon - prev_wp.lon) * t
+
+            # повний перемальовок дешевий (рельєф КЕШОВАНИЙ у
+            # _get_terrain_profile -- тут перераховуються лише лінії/текст
+            # польоту, без нових SRTM-запитів)
+            self._redraw_altitude_profile()
             return
-        wp = self._wp_by_index(self._alt_drag["wp_index"])
-        if wp is None:
-            return
-        geom = self._alt_profile_geom
-        y = max(geom["margin_t"], min(event.y, geom["margin_t"] + geom["plot_h"]))
-        frac = 1 - (y - geom["margin_t"]) / geom["plot_h"]
-        new_amsl = geom["v_min"] + frac * (geom["v_max"] - geom["v_min"])
-        wp.alt = self._amsl_to_relative_alt(wp, new_amsl)
-        # повний перемальовок дешевий (рельєф КЕШОВАНИЙ у
-        # _get_terrain_profile -- тут перераховуються лише лінії/текст
-        # польоту, без нових SRTM-запитів)
-        self._redraw_altitude_profile()
+
+        if self._alt_zoom_drag is not None and self._alt_profile_geom is not None:
+            geom = self._alt_profile_geom
+            canvas = self.alt_profile_canvas
+            canvas.delete("zoom_select_rect")
+            x1 = self._alt_zoom_drag["start_x"]
+            x2 = event.x
+            top = geom["margin_t"]
+            bottom = geom["margin_t"] + geom["plot_h"]
+            canvas.create_rectangle(
+                x1, top, x2, bottom,
+                fill=self._mission_colors().get("alt_axis_line", "#888888"), stipple="gray25", outline="",
+                tags=("zoom_select_rect",),
+            )
 
 
     def _on_alt_release_edit(self, event):
-        if self._alt_drag is None:
+        if self._alt_drag is not None:
+            self._alt_drag = None
+            self._on_mission_edited()
             return
-        self._alt_drag = None
-        self._on_mission_edited()
+
+        if self._alt_zoom_drag is not None:
+            geom = self._alt_profile_geom
+            start_x = self._alt_zoom_drag["start_x"]
+            self._alt_zoom_drag = None
+            self.alt_profile_canvas.delete("zoom_select_rect")
+            if geom is None:
+                return
+            # захист від випадкового мікро-кліку (< 8px -- звичайний
+            # клік по порожньому місцю, не виділення прямокутника)
+            if abs(event.x - start_x) < 8:
+                return
+            dist1 = self._alt_x_to_dist(start_x, geom)
+            dist2 = self._alt_x_to_dist(event.x, geom)
+            new_start, new_end = min(dist1, dist2), max(dist1, dist2)
+            if new_end - new_start < 1.0:
+                return  # виділений діапазон менше 1м -- нема сенсу зумити
+            # ПОСЛІДОВНИЙ зум -- новий діапазон обчислюється відносно
+            # ВЖЕ ПОТОЧНОГО видимого діапазону (geom вже враховує
+            # активний self._alt_zoom_range через view_start/view_span
+            # у _redraw_altitude_profile), тому просто МІНЯЄМО
+            # self._alt_zoom_range на щойно виділений -- кожен наступний
+            # раз звужує його ще сильніше, скільки завгодно разів поспіль.
+            self._alt_zoom_range = (new_start, new_end)
+            self._redraw_altitude_profile()
+
+
+    def _alt_x_to_dist(self, x: float, geom) -> float:
+        """X-координата (пікселі канваса) -> дистанція вздовж маршруту
+        (метри), з урахуванням поточного видимого діапазону. Те саме,
+        що _alt_click_to_dist, але приймає X напряму (не event) --
+        зручно для виділення прямокутника, де порівнюються ДВІ
+        X-координати (початок і кінець drag), а не одна подія."""
+        frac_x = (x - geom["margin_l"]) / geom["plot_w"]
+        frac_x = max(0.0, min(1.0, frac_x))
+        return geom["view_start"] + frac_x * geom["view_span"]
+
+
+    def _on_alt_right_click(self, event):
+        """Правий клік на графіку висот -- те саме контекстне меню
+        (Додати точку / Додати команду / Видалити), що й на карті/в
+        таблиці. Синхронізує виділення таблиці на НАЙБЛИЖЧУ (за
+        X-координатою) точку маршруту ПЕРЕД показом меню -- щоб усі три
+        дії (орієнтуються на mission_table.selection()) працювали з
+        тим самим вейпоінтом, біля якого клікнули -- той самий принцип,
+        що й на карті (_on_map_right_click).
+
+        "Додати точку" тут -- ТА САМА _add_waypoint_row, що й на карті/
+        в таблиці (завжди СЕРЕДИНА між обраною й наступною точкою,
+        незалежно від точного місця кліку) -- єдина логіка на всіх трьох
+        поверхнях. Раніше тут була окрема, "по точному місцю кліку"
+        поведінка (_add_waypoint_at_click) -- прибрано на користь
+        єдиноманітності."""
+        if self.analyzer is None or self._alt_profile_geom is None:
+            return
+        geom = self._alt_profile_geom
+        nav_wps = geom["nav_wps"]
+        dists = geom["dists"]
+        if not nav_wps:
+            return
+
+        click_dist = self._alt_click_to_dist(event, geom)
+        # виключаємо Home (index == 0) з кандидатів -- вона фізично
+        # бере участь у геометрії маршруту й видна на графіку (є в
+        # nav_wps), але НЕ показується окремим рядком у таблиці
+        # (_delete_selected_row: "Home не видаляється (і не показується
+        # в таблиці взагалі)") -- якщо найближчою за X виявлялась саме
+        # вона, синхронізація виділення мовчки провалювалась (жоден
+        # рядок з idx="0" не існує), і "Додати команду"/"Видалити"
+        # непередбачувано працювали з тим, що лишалось виділеним раніше.
+        candidates = [i for i in range(len(nav_wps)) if nav_wps[i].index != 0] or list(range(len(nav_wps)))
+        closest_i = min(candidates, key=lambda i: abs(dists[i] - click_dist))
+        closest_wp = nav_wps[closest_i]
+        for row_id in self.mission_table.get_children():
+            if self.mission_table.set(row_id, "idx") == str(closest_wp.index):
+                self.mission_table.selection_set(row_id)
+                break
+
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label=i18n.t("ctx_add_waypoint"), command=self._add_waypoint_row)
+        menu.add_command(label=i18n.t("ctx_add_command"), command=self._add_command_row)
+        menu.add_separator()
+        menu.add_command(label=i18n.t("btn_delete"), command=self._delete_selected_row)
+        menu.tk_popup(event.x_root, event.y_root)
+
+
+    def _alt_click_to_dist(self, event, geom) -> float:
+        """X-координата кліку на графіку висот -> дистанція вздовж
+        маршруту (метри), З УРАХУВАННЯМ поточного видимого діапазону
+        (view_start/view_span -- весь маршрут, чи активний зум). Спільна
+        формула для _on_alt_right_click (пошук найближчої точки для
+        синхронізації виділення таблиці) і горизонтального перетягування
+        точки між сусідами (_on_alt_motion_edit)."""
+        frac_x = (event.x - geom["margin_l"]) / geom["plot_w"]
+        frac_x = max(0.0, min(1.0, frac_x))
+        return geom["view_start"] + frac_x * geom["view_span"]
 
 
     def _schedule_reanalysis(self):
@@ -597,6 +865,21 @@ class MissionEditorMixin:
 
     def _on_mission_edited(self):
         self._renumber_waypoints()
+        # ВАЖЛИВО: синхронізуємо analyzer.nav_wps з actual all_wps ОДРАЗУ,
+        # тут -- не чекаючи на важке пересворення self.analyzer у
+        # _run_reanalysis() (дебаунс 600мс, там же й перерахунок SRTM).
+        # nav_wps -- звичайний список, порахований ОДИН раз у __init__
+        # MissionAnalyzer, а НЕ властивість (property) -- сам по собі
+        # НЕ підхоплює зміни в all_wps автоматично. Для ПЕРЕТЯГУВАННЯ
+        # існуючої точки це непомітно (мутується той самий об'єкт, на
+        # який nav_wps і так уже посилається) -- але для ДОДАВАННЯ/
+        # ВИДАЛЕННЯ точки (склад списку міняється) без цього рядка карта
+        # й графік висот малювали б СТАРИЙ маршрут ще секунду після
+        # правки, поки не спрацює дебаунс -- і то лише тому, що
+        # _run_reanalysis() пересоздає analyzer, а РЕАЛЬНОЇ повторної
+        # перемальовки карти/графіка після цього перестворення не було
+        # взагалі (ще один прихований бік цього самого бага).
+        self.analyzer.nav_wps = [wp for wp in self.analyzer.all_wps if wp.is_nav_point]
         self._populate_mission_table(self.analyzer.all_wps)
         self._redraw_route_only()
         self._redraw_altitude_profile()
@@ -686,10 +969,35 @@ class MissionEditorMixin:
         if next_wp is not None:
             mid_lat = (selected_wp.lat + next_wp.lat) / 2
             mid_lon = (selected_wp.lon + next_wp.lon) / 2
-            mid_alt = (selected_wp.alt + next_wp.alt) / 2
+            # ВАЖЛИВО: усереднюємо AMSL (видиму на графіку висот
+            # висоту), а НЕ сирий .alt -- сусідні точки можуть мати
+            # РІЗНИЙ frame (напр. frame=0/2 -- .alt це вже AMSL
+            # напряму, чи frame=10 -- .alt це висота НАД ЗЕМЛЕЮ саме в
+            # ЇЇ точці) -- пряме усереднення сирих значень з РІЗНИХ
+            # систем відліку дає число, що не має сенсу в жодній з них.
+            # Нова точка завжди отримує frame=3 (relative до home),
+            # тому AMSL-середнє переводимо назад тою самою формулою,
+            # що й для home-frame (_amsl_to_relative_alt: amsl -
+            # home_amsl -- та сама логіка, лише new_wp ще не існує на
+            # момент виклику, тому рахуємо напряму, без допоміжної
+            # функції, яка приймає готовий wp).
+            amsl1 = self.analyzer._absolute_alt(selected_wp)
+            amsl2 = self.analyzer._absolute_alt(next_wp)
+            if amsl1 is None:
+                amsl1 = selected_wp.alt
+            if amsl2 is None:
+                amsl2 = next_wp.alt
+            mid_amsl = (amsl1 + amsl2) / 2
+            mid_alt = mid_amsl - (self.analyzer.home_amsl or 0.0)
         else:
-            # обрана точка -- остання в маршруті, "наступної" немає
-            mid_lat, mid_lon, mid_alt = selected_wp.lat, selected_wp.lon, selected_wp.alt
+            # обрана точка -- остання в маршруті, "наступної" немає --
+            # ставимо нову поруч (той самий AMSL, переведений у frame=3
+            # нової точки -- та сама причина, що й вище: копіювання
+            # СИРОГО .alt напряму дало б неправильну AMSL, якщо
+            # selected_wp має інший frame, ніж 3)
+            mid_lat, mid_lon = selected_wp.lat, selected_wp.lon
+            amsl1 = self.analyzer._absolute_alt(selected_wp)
+            mid_alt = (amsl1 if amsl1 is not None else selected_wp.alt) - (self.analyzer.home_amsl or 0.0)
 
         new_wp = Waypoint(
             index=-1,  # перенумерується в _on_mission_edited() -> _renumber_waypoints()
