@@ -27,8 +27,8 @@ from angle_view import draw_angle_profile
 from landing_view import draw_landing_approach
 from mission_page import MISSION_THEME_DARK, MISSION_THEME_LIGHT
 import theme
-from map_view import fetch_tiles, bind_pan, MapTooLargeError, render_viewport, compute_viewport_tile_bounds
-from overview_map import compute_area_tile_bounds, render_area_map
+from map_view import fetch_tiles, bind_pan, MapTooLargeError, render_viewport, draw_single_tile
+from overview_map import compute_area_tile_bounds, render_area_map, begin_area_render
 import i18n
 
 
@@ -102,6 +102,7 @@ class AnalysisPageMixin:
         self._meteo_canvases = []          # [0]=Зліт(старт), [1]=Глісада(посадка)
         self._meteo_map_images = [[], []]  # тримаємо refs до PhotoImage
         self._meteo_render_params = [None, None]  # кеш параметрів останнього рендеру -- для перемальовки при <Configure>
+        self._meteo_render_generation = [0, 0]  # захист від гонки при прогресивній відмальовці -- окремо на кожну з двох карт
         self._last_meteo_raw = None        # кеш сирих даних API -- для ретрансляції тексту погоди без мережі
         self._glide_issues_text = ""       # текст проблем глісади зі звіту (наповнюється при завантаженні місії)
         self._land_weather_text = ""       # текст погоди для посадки (наповнюється по кнопці "Отримати метео")
@@ -191,7 +192,7 @@ class AnalysisPageMixin:
 
             map_box.bind("<Configure>", _keep_square)
 
-            canvas = tk.Canvas(map_box, bg="#cccccc", highlightthickness=0)
+            canvas = tk.Canvas(map_box, bg=self._map_placeholder_bg(), highlightthickness=0)
             canvas.pack(fill="both", expand=True)
             bind_pan(canvas)
             idx = len(self._meteo_canvases)
@@ -266,26 +267,28 @@ class AnalysisPageMixin:
         # НЕ квадрат (на відміну від add_map_block вище/нижче -- ті
         # показують фіксовану площу 4x4 км навколо однієї точки, тому
         # квадрат для них і є правильною формою). Тут -- огляд усього
-        # маршруту: зум підбирається під РЕАЛЬНИЙ розмір цього канваса
-        # (_find_native_fit_zoom, той самий підхід, що й на "Місія" --
-        # GMap.NET/Mission Planner: кожен тайл окремо, 1:1, без склейки
-        # в мозаїку й без PIL.resize()). Без власного скролбара -- як і
-        # решта карт на "Аналіз" (add_map_block вище/нижче), прокрутка
-        # тільки одна, зовнішня, для всієї вкладки.
-        self.trajectory_map_canvas = tk.Canvas(traj_map_box, bg="#cccccc", highlightthickness=0, bd=0)
+        # маршруту: карта береться ГОТОВОЮ з "Місія" (self.
+        # _initial_map_render, той самий зум і центр, що й початковий
+        # автопідбір при завантаженні -- див. _load_trajectory_map
+        # нижче) -- жодного власного підбору зуму чи мережевого запиту
+        # тут немає. Без власного скролбара -- як і решта карт на
+        # "Аналіз" (add_map_block вище/нижче), прокрутка тільки одна,
+        # зовнішня, для всієї вкладки.
+        self.trajectory_map_canvas = tk.Canvas(traj_map_box, bg=self._map_placeholder_bg(), highlightthickness=0, bd=0)
         self.trajectory_map_canvas.pack(fill="both", expand=True)
         bind_pan(self.trajectory_map_canvas)
         self._trajectory_map_params = None  # кеш (tiles, zoom, bounds, center) -- для перемальовки без повторного фетчу
         self._traj_map_resize_after_id = None
 
         def _on_traj_map_configure(event):
-            # canvas змінив розмір (вікно потягнули) -- зум і діапазон
-            # тайлів залежать від розміру канваса, тому просто
-            # перераховуємо все заново через _load_trajectory_map()
-            # (дешево: переиспользує вже завантажені тайли, докачує
-            # лише недостаюче). Дебаунс -- той самий прийом, що й для
-            # resize карти на "Місія": під час активного розтягування
-            # вікна Configure сиплеться десятками подій на секунду.
+            # canvas змінив розмір (вікно потягнули) -- render_viewport
+            # (усередині _load_trajectory_map) сам заново міряє розмір
+            # канваса й перемальовує вже ГОТОВІ (з _initial_map_render)
+            # тайли під нього -- ніякого мережевого запиту чи повторного
+            # підбору зуму тут більше немає, це дешева локальна
+            # операція. Дебаунс лишається як проста, необтяжлива
+            # обережність -- під час активного розтягування вікна
+            # Configure сиплеться десятками подій на секунду.
             if self._traj_map_resize_after_id is not None:
                 self.after_cancel(self._traj_map_resize_after_id)
             self._traj_map_resize_after_id = self.after(150, self._load_trajectory_map)
@@ -1009,9 +1012,58 @@ class AnalysisPageMixin:
                 )
                 continue
             wp = (self.analyzer.nav_wps[0] if i == 0 else self.analyzer.nav_wps[-1])
+
+            # Підбір зуму (чиста математика, БЕЗ мережі) і власне
+            # begin_area_render (малює в Tkinter, тому МАЄ виконуватись у
+            # ГОЛОВНОМУ потоці) -- зроблено ТУТ, синхронно, ДО старту
+            # фонового потоку з мережею -- та сама схема, що й на "Місія"
+            # (render_map() робить синхронну частину сама, worker() --
+            # лише мережу). Якщо зробити навпаки (плейсхолдери через
+            # self.after(0, ...) З фонового потоку) -- виникає гонка:
+            # якщо якийсь тайл вже лежить у диск-кеші й відповідає майже
+            # миттєво, його колбек міг би виконатись РАНІШЕ, ніж
+            # begin_area_render встигне реально відпрацювати (self.after
+            # лише СТАВИТЬ колбек у чергу, не виконує одразу) -- і такий
+            # тайл тихо губився б назавжди, без жодної спроби повтору
+            # (саме це й трапилось на практиці -- 1 плейсхолдер із 133
+            # так і не замінився).
+            self._meteo_render_generation[i] += 1
+            my_generation = self._meteo_render_generation[i]
+
+            zoom = 16
+            bounds = None
+            for z in range(zoom, 0, -1):
+                try:
+                    bounds = compute_area_tile_bounds(wp.lat, wp.lon, z)
+                    zoom = z
+                    break
+                except MapTooLargeError:
+                    continue
+            if bounds is None:
+                canvas.delete("all")
+                canvas.create_text(
+                    canvas.winfo_width() // 2 or 150, canvas.winfo_height() // 2 or 150,
+                    text=i18n.t("msg_render_error_fmt", error="MapTooLargeError"), fill="#FF6666",
+                    font=("Segoe UI", 9), justify="center",
+                )
+                continue
+
+            tx_min, tx_max, ty_min, ty_max, _ = bounds
+            image_refs = self._meteo_map_images[i]
+            sc = self._map_placeholder_bg()
+            screen_origin_gx, screen_origin_gy = begin_area_render(
+                canvas, wp.lat, wp.lon, zoom, tx_min, tx_max, ty_min, ty_max, image_refs,
+                placeholder_bg=sc, placeholder_outline=sc,
+                flight_az=flight_az, wind_dir=wind_dir, wind_spd=wind_spd,
+            )
+
             threading.Thread(
                 target=self._load_area_tiles,
-                args=(canvas, i, wp.lat, wp.lon, flight_az, wind_dir, wind_spd),
+                args=(
+                    canvas, i, wp.lat, wp.lon, flight_az, wind_dir, wind_spd,
+                    zoom, tx_min, tx_max, ty_min, ty_max,
+                    screen_origin_gx, screen_origin_gy, my_generation,
+                ),
                 daemon=True,
             ).start()
 
@@ -1019,8 +1071,24 @@ class AnalysisPageMixin:
     def _load_area_tiles(self, canvas: tk.Canvas, idx: int,
                          lat: float, lon: float,
                          flight_az: float | None,
-                         wind_dir: float | None, wind_spd: float | None):
-        """Фоновий поток: підбираємо зум, завантажуємо тайли 4×4 км, рендеримо."""
+                         wind_dir: float | None, wind_spd: float | None,
+                         zoom: int, tx_min: int, tx_max: int, ty_min: int, ty_max: int,
+                         screen_origin_gx: float, screen_origin_gy: float,
+                         my_generation: int):
+        """Фоновий поток -- ЛИШЕ мережа (fetch_tiles) і завершення. Підбір
+        зуму й begin_area_render (плейсхолдери + компас/стрілки) уже
+        виконані СИНХРОННО в головному потоці, у _on_meteo_ready, ДО
+        старту цього потоку -- жодної гонки між ними тепер немає:
+        screen_origin_gx/gy передаються сюди вже ГОТОВИМИ, замість того,
+        щоб чекати на асинхронний self.after(0, ...) з фонового потоку.
+
+        self._meteo_render_generation[idx] -- захист від гонки, той
+        самий принцип, що й self._map_render_generation на "Місія":
+        якщо цю функцію викликали повторно (напр. користувач швидко
+        переключив місію) ПОКИ попередня загрузка ще йде, старий,
+        вже неактуальний результат не повинен домалюватись поверх
+        нового.
+        """
         try:
             if self.tile_cache is None:
                 # той самий лінивий конструктор, що і в render_map() -- якщо
@@ -1028,59 +1096,67 @@ class AnalysisPageMixin:
                 disk_cache = self.tilecache_var.get().strip() or None
                 self.tile_cache = OnlineTileCache(provider=self.provider_key, disk_cache_dir=disk_cache)
 
-            # для локальної карти 4×4 км потрібен ВИСОКИЙ зум (деталізація
-            # місцевості), а не self.zoom_var -- той підібраний під ОГЛЯД
-            # усього маршруту і може бути навмисно дуже дрібним (мало тайлів
-            # на величезну площу), що й давало "півобласті в кадрі"
-            zoom = 16
-            bounds = None
-            for z in range(zoom, 0, -1):
-                try:
-                    bounds = compute_area_tile_bounds(lat, lon, z)
-                    zoom = z
-                    break
-                except MapTooLargeError:
-                    continue
-            if bounds is None:
-                raise RuntimeError("не вдалось підібрати зум під 400 тайлів")
-
-            tx_min, tx_max, ty_min, ty_max, _ = bounds
-            tiles, _ = fetch_tiles(self.tile_cache, tx_min, tx_max, ty_min, ty_max, zoom)
             image_refs = self._meteo_map_images[idx]
+            tiles: dict = {}
 
-            def do_render():
-                try:
-                    render_area_map(
-                        canvas, lat, lon, zoom, tiles, image_refs,
-                        tx_min, tx_max, ty_min, ty_max,
-                        flight_az=flight_az, wind_dir=wind_dir, wind_spd=wind_spd,
-                    )
-                    # зберігаємо параметри -- знадобляться для перемальовки,
-                    # коли канвас (можливо, прихованої зараз вкладки) реально
-                    # отримає свій розмір і викличе <Configure>
-                    self._meteo_render_params[idx] = (
-                        lat, lon, zoom, tiles, image_refs,
-                        tx_min, tx_max, ty_min, ty_max,
-                        flight_az, wind_dir, wind_spd,
-                    )
-                except Exception as e:
-                    canvas.delete("all")
-                    canvas.create_text(
-                        canvas.winfo_width() // 2 or 150, canvas.winfo_height() // 2 or 150,
-                        text=i18n.t("msg_render_error_fmt", error=e),
-                        fill="#FF6666", font=("Segoe UI", 9), justify="center",
-                    )
+            def on_tile_ready(tx, ty, data):
+                tiles[(tx, ty)] = data
+                self.after(
+                    0,
+                    lambda: self._on_area_tile_ready(
+                        canvas, idx, tx, ty, data, my_generation, screen_origin_gx, screen_origin_gy,
+                    ),
+                )
 
-            self.after(0, do_render)
+            fetch_tiles(
+                self.tile_cache, tx_min, tx_max, ty_min, ty_max, zoom,
+                tile_ready_cb=on_tile_ready,
+            )
+
+            def do_finish():
+                if my_generation != self._meteo_render_generation[idx]:
+                    return
+                # зберігаємо параметри -- знадобляться для перемальовки,
+                # коли канвас (можливо, прихованої зараз вкладки) реально
+                # отримає свій розмір і викличе <Configure>, чи при зміні
+                # мови (перемальовка вже готового, без повторної мережі)
+                self._meteo_render_params[idx] = (
+                    lat, lon, zoom, tiles, image_refs,
+                    tx_min, tx_max, ty_min, ty_max,
+                    flight_az, wind_dir, wind_spd,
+                )
+
+            self.after(0, do_finish)
+
         except Exception as e:
-            err_text = i18n.t("msg_map_load_error_fmt", error=e)
-            self.after(0, lambda: (
-                canvas.delete("all"),
+            def show_error():
+                if my_generation != self._meteo_render_generation[idx]:
+                    return
+                canvas.delete("all")
                 canvas.create_text(
                     canvas.winfo_width() // 2 or 150, canvas.winfo_height() // 2 or 150,
-                    text=err_text, fill="#FF6666", font=("Segoe UI", 9), justify="center",
-                ),
-            ))
+                    text=i18n.t("msg_render_error_fmt", error=e),
+                    fill="#FF6666", font=("Segoe UI", 9), justify="center",
+                )
+            self.after(0, show_error)
+
+
+    def _on_area_tile_ready(self, canvas, idx, tx, ty, data, generation, screen_origin_gx, screen_origin_gy):
+        """Домальовує ОДИН тайл на area-карті (Зліт/Посадка) одразу по
+        готовності -- частина прогресивної відмальовки (_load_area_tiles).
+        Викликається окремо на кожен тайл, з головного потоку.
+
+        screen_origin_gx/gy передаються НАПРЯМУ (не через спільний
+        мутабельний render_state, як було раніше) -- вони обчислені й
+        готові ще ДО старту фонового потоку (_on_meteo_ready), тому тут
+        гонки бути не може: жодного стану, який міг би "ще не встигнути"
+        заповнитись."""
+        if generation != self._meteo_render_generation[idx]:
+            return  # застарілий рендер -- відкидаємо мовчки
+        draw_single_tile(
+            canvas, self._meteo_map_images[idx], tx, ty, data,
+            screen_origin_gx, screen_origin_gy, raise_tag="overlay_layer",
+        )
 
 
     def _set_meteo_texts(self, start_text: str, land_text: str):
@@ -1227,6 +1303,17 @@ class AnalysisPageMixin:
         return "#1a1a1a" if self._is_dark_theme() else "white"
 
 
+    def _map_placeholder_bg(self) -> str:
+        """Фон канвасів карт (Взліт/Маршрут/Посадка) -- ТОЙ САМИЙ колір,
+        що й на "Місія" (MISSION_THEME_DARK/LIGHT["map_placeholder_bg"]),
+        для узгодженості. Без цього в темній темі під час завантаження
+        тайлів мигав би контрастний СВІТЛО-СІРИЙ прямокутник на місці
+        кожного ще не завантаженого тайла -- та сама причина, що й
+        нещодавно виправлена на "Місія"."""
+        c = MISSION_THEME_DARK if self._is_dark_theme() else MISSION_THEME_LIGHT
+        return c["map_placeholder_bg"]
+
+
     def _apply_analysis_theme(self):
         """Перефарбовує ВЖЕ ПОБУДОВАНУ сторінку "Аналіз" під поточну тему
         -- викликається з app.py: apply_app_theme(). Canvas-фони не
@@ -1255,6 +1342,13 @@ class AnalysisPageMixin:
             canvas = getattr(self, attr, None)
             if canvas is not None and canvas.winfo_exists():
                 canvas.configure(bg=graph_bg)
+
+        map_bg = self._map_placeholder_bg()
+        for canvas in self._meteo_canvases:
+            if canvas.winfo_exists():
+                canvas.configure(bg=map_bg)
+        if hasattr(self, "trajectory_map_canvas") and self.trajectory_map_canvas.winfo_exists():
+            self.trajectory_map_canvas.configure(bg=map_bg)
 
         # кнопки "Зберегти PDF" і вибору дати -- звичайні tk.Button з
         # кольором, "заскленим" при створенні (не ttk.Style) -- без цього
@@ -1302,90 +1396,35 @@ class AnalysisPageMixin:
     def _load_trajectory_map(self):
         """Показує карту всього маршруту для вкладки «Траєкторія».
 
-        Зум підбирається ОКРЕМО під власний канвас цієї вкладки (той
-        самий метод, що й на "Місія" -- _find_native_fit_zoom, підхід
-        GMap.NET/Mission Planner), а не переиспользується з "Місія": їхні
-        канваси різного розміру, тому й зум має бути свій. Малюється
-        так само тайл-за-тайлом (render_viewport), БЕЗ склейки в мозаїку
-        й без PIL.resize() -- та сама причина, що й на "Місія" (це і
-        було головним гальмом, ~1 секунда на відмальовку).
+        Бере ГОТОВИЙ, вже відмальований на "Місія" початковий (auto_zoom)
+        рендер напряму -- self._initial_map_render (mission_page.py):
+        той самий зум, той самий набір тайлів, той самий центр. Жодного
+        повторного підбору зуму, жодного мережевого запиту, жодного
+        окремого потоку -- усі дані вже готові в пам'яті, лишається
+        тільки намалювати.
 
-        Переиспользує сирі тайли, вже завантажені на "Місія" (self.
-        _last_map_render["tiles"]) -- докачує мережею ЛИШЕ ті координати,
-        яких там немає. Аналіз і так важкий процес (перевірка висоти над
-        рельєфом по SRTM), тому економія на повторному скачуванні тих
-        самих тайлів карти тут особливо доречна.
+        ВАЖЛИВО: саме _initial_map_render, а НЕ _last_map_render --
+        останній оновлюється на КОЖЕН рендер "Місія", включно з ручним
+        зумом/панорамуванням користувача ПІЗНІШЕ. "Маршрут" завжди
+        повинен показувати огляд УСЬОГО маршруту, незалежно від того,
+        куди користувач потім покрутив камеру на "Місія".
         """
         if self.analyzer is None or not hasattr(self, "trajectory_map_canvas"):
             return
 
-        canvas = self.trajectory_map_canvas
-        canvas.update_idletasks()
-        canvas_w = max(canvas.winfo_width(), 100)
-        # висота блока фіксована (traj_map_box, height=460 за
-        # замовчуванням, pack_propagate(False)) -- берем РЕАЛЬНУ поточну
-        # висоту канваса як ціль підбору зуму, а не жорстко 460, щоб
-        # коректно підлаштовуватись, якщо блок колись матиме інший розмір
-        canvas_h = max(canvas.winfo_height(), 100)
-
-        zoom = self._find_native_fit_zoom(canvas_w, canvas_h)
-        if zoom is None:
+        snapshot = getattr(self, "_initial_map_render", None)
+        if snapshot is None:
+            # "Місія" ще не рендерилась жодного разу в цій сесії --
+            # нема звідки брати готове. Мовчки нічого не малюємо
+            # (звичайна ситуація, якщо файл місії ще не завантажували).
             return
 
-        nav_wps = self.analyzer.nav_wps
-        if not nav_wps:
-            return
-        # той самий принцип, що й на "Місія" -- геометричний ЦЕНТР
-        # РАМКИ маршруту, не центроїд (середнє координат точок): при
-        # нерівномірному розподілі точок центроїд зміщується і
-        # обрізає маршрут з одного боку, навіть якщо розмір "влазить"
-        lats = [wp.lat for wp in nav_wps]
-        lons = [wp.lon for wp in nav_wps]
-        center_lat = (min(lats) + max(lats)) / 2
-        center_lon = (min(lons) + max(lons)) / 2
-        tx_min, tx_max, ty_min, ty_max = compute_viewport_tile_bounds(
-            center_lat, center_lon, zoom, canvas_w, canvas_h, buffer_factor=1.0,
-        )
+        zoom = snapshot["zoom"]
+        tiles = snapshot["tiles"]
+        tx_min, tx_max = snapshot["tx_min"], snapshot["tx_max"]
+        ty_min, ty_max = snapshot["ty_min"], snapshot["ty_max"]
+        center_lat, center_lon = snapshot["center_lat"], snapshot["center_lon"]
 
-        if self.tile_cache is None:
-            disk_cache = self.tilecache_var.get().strip() or None
-            self.tile_cache = OnlineTileCache(provider=self.provider_key, disk_cache_dir=disk_cache)
-
-        # тайли, вже наявні з "Місія" (той самий zoom) -- незалежно від
-        # режиму ("overview"/"viewport", обидва тепер малюються
-        # тайл-за-тайлом, і в обох _last_map_render["tiles"] містить
-        # сирі байти за координатами)
-        reused_tiles: dict = {}
-        last = getattr(self, "_last_map_render", None)
-        if last is not None and last.get("zoom") == zoom:
-            reused_tiles = last.get("tiles", {})
-
-        needed_coords = [
-            (tx, ty)
-            for tx in range(tx_min, tx_max + 1)
-            for ty in range(ty_min, ty_max + 1)
-        ]
-        missing_coords = [c for c in needed_coords if c not in reused_tiles]
-
-        def worker():
-            tiles = {c: reused_tiles[c] for c in needed_coords if c in reused_tiles}
-            if missing_coords:
-                fetched, _cancelled = fetch_tiles(
-                    self.tile_cache, tx_min, tx_max, ty_min, ty_max, zoom,
-                    coords=missing_coords,
-                )
-                tiles.update(fetched)
-            self.after(
-                0,
-                lambda: self._on_trajectory_map_ready(
-                    tiles, zoom, tx_min, tx_max, ty_min, ty_max, center_lat, center_lon,
-                ),
-            )
-
-        threading.Thread(target=worker, daemon=True).start()
-
-
-    def _on_trajectory_map_ready(self, tiles, zoom, tx_min, tx_max, ty_min, ty_max, center_lat, center_lon):
         self._trajectory_map_params = (tiles, zoom, tx_min, tx_max, ty_min, ty_max, center_lat, center_lon)
         render_viewport(
             self.trajectory_map_canvas, self.analyzer, zoom, center_lat, center_lon,

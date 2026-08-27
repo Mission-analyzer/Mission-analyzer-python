@@ -21,7 +21,7 @@ import tkinter as tk
 import i18n
 from analyzer import MissionAnalyzer
 from geo import TILE_SIZE, lonlat_to_tile_xy, lonlat_to_pixel
-from map_view import _decode_tile_image, MapTooLargeError
+from map_view import _decode_tile_image, MapTooLargeError, draw_single_tile
 
 try:
     from PIL import Image, ImageTk
@@ -53,42 +53,6 @@ def compute_area_tile_bounds(lat: float, lon: float, zoom: int,
 
     return tx_min, tx_max, ty_min, ty_max, total
 
-
-def _compose_scaled(tiles: dict, tx_min: int, tx_max: int, ty_min: int, ty_max: int,
-                    target_w: int, target_h: int):
-    """
-    Збирає всі тайли в одне мозаїчне зображення і масштабує його РІВНО під
-    (target_w, target_h) -- пікселі канваса. Без цього мозаїка тайлів
-    (кратна 256px) майже ніколи точно не збігається з реальним розміром
-    рамки, і карта виглядає ширшою/вужчою за неї. Повертає
-    (PhotoImage, scale_x, scale_y) або None, якщо Pillow не встановлено
-    (тоді викликач має намалювати тайли в натуральну величину як fallback).
-    """
-    if not _HAS_PIL:
-        return None
-
-    grid_w = (tx_max - tx_min + 1) * TILE_SIZE
-    grid_h = (ty_max - ty_min + 1) * TILE_SIZE
-
-    mosaic = Image.new("RGB", (grid_w, grid_h), "#cccccc")
-    for tx in range(tx_min, tx_max + 1):
-        for ty in range(ty_min, ty_max + 1):
-            data = tiles.get((tx, ty))
-            if not data:
-                continue
-            try:
-                tile_img = Image.open(io.BytesIO(data)).convert("RGB")
-            except Exception:
-                continue
-            px = (tx - tx_min) * TILE_SIZE
-            py = (ty - ty_min) * TILE_SIZE
-            mosaic.paste(tile_img, (px, py))
-
-    target_w = max(int(target_w), 1)
-    target_h = max(int(target_h), 1)
-    resized = mosaic.resize((target_w, target_h), Image.LANCZOS)
-    photo = ImageTk.PhotoImage(resized)
-    return photo, target_w / grid_w, target_h / grid_h
 
 
 def _compose_scaled_fit(tiles: dict, tx_min: int, tx_max: int, ty_min: int, ty_max: int,
@@ -156,72 +120,97 @@ def _draw_tiles(canvas: tk.Canvas, tiles: dict, image_refs: list,
                                     fill="#cccccc", outline="#aaaaaa")
 
 
-def render_area_map(canvas: tk.Canvas, lat: float, lon: float, zoom: int,
-                    tiles: dict, image_refs: list,
-                    tx_min: int, tx_max: int, ty_min: int, ty_max: int,
-                    flight_az: float | None = None,
-                    wind_dir: float | None = None,
-                    wind_spd: float | None = None):
+def begin_area_render(
+    canvas: tk.Canvas, lat: float, lon: float, zoom: int,
+    tx_min: int, tx_max: int, ty_min: int, ty_max: int,
+    image_refs: list,
+    placeholder_bg: str = "#cccccc", placeholder_outline: str = "#aaaaaa",
+    flight_az: float | None = None,
+    wind_dir: float | None = None,
+    wind_spd: float | None = None,
+) -> tuple[float, float]:
     """
-    Рисує квадрат 4×4 км навколо точки (lat, lon): тайли (масштабовані
-    рівно під розмір канваса) + стрілки азимуту польоту і вітру поверх
-    карти. Read-only, без редагування.
-    """
-    canvas.delete("all")
-    image_refs.clear()
+    Перший крок прогресивної відмальовки area-карти (Взліт/Посадка --
+    квадрат навколо ОДНІЄЇ точки, не весь маршрут) -- та сама ідея, що
+    й begin_viewport_render у map_view.py: спершу плейсхолдери на
+    місці кожного тайла + все, що не залежить від мережі (сама точка,
+    компас N/E/S/W, стрілки азимуту/вітру), а тайли домальовуються
+    ОКРЕМО по готовності (draw_single_tile з map_view.py, той самий,
+    що й на "Місія" -- переиспользується напряму, лише з іншим
+    raise_tag: "overlay_layer" замість "route_layer", тут-бо немає
+    маршруту, лише компас/стрілки).
 
+    Тайли малюються 1:1, БЕЗ PIL-масштабування під точний розмір
+    канваса (як робив старий render_area_map через _compose_scaled) --
+    невелика неточність охоплення (може вийти трохи більше/менше за
+    номінальні 4х4 км) прийнятна для огляду однієї точки, натомість
+    відмальовка миттєва й прогресивна, без "секунди на PIL.resize".
+
+    Повертає (screen_origin_gx, screen_origin_gy) -- зберегти й
+    передавати в кожен наступний виклик draw_single_tile() для цього
+    самого рендеру.
+    """
     canvas.update_idletasks()
     W = max(canvas.winfo_width(), 100)
     H = max(canvas.winfo_height(), 100)
+
+    canvas.delete("all")
+    image_refs.clear()
+
+    center_gx, center_gy = lonlat_to_pixel(lat, lon, zoom)
+    screen_origin_gx = center_gx - W / 2
+    screen_origin_gy = center_gy - H / 2
+
+    for tx in range(tx_min, tx_max + 1):
+        for ty in range(ty_min, ty_max + 1):
+            px = tx * TILE_SIZE - screen_origin_gx
+            py = ty * TILE_SIZE - screen_origin_gy
+            canvas.create_rectangle(
+                px, py, px + TILE_SIZE, py + TILE_SIZE,
+                fill=placeholder_bg, outline=placeholder_outline, tags=(f"tile_{tx}_{ty}",),
+            )
+
+    cx, cy = W / 2, H / 2
     R = min(W, H) // 2 - 16
 
-    origin_x = tx_min * TILE_SIZE
-    origin_y = ty_min * TILE_SIZE
-
-    composed = _compose_scaled(tiles, tx_min, tx_max, ty_min, ty_max, W, H)
-    if composed:
-        photo, scale_x, scale_y = composed
-        image_refs.append(photo)
-        canvas.create_image(0, 0, image=photo, anchor="nw")
-    else:
-        # Pillow не встановлено -- малюємо тайли в натуральну величину
-        # (карта може не збігатись пиксель-в-піксель з рамкою)
-        _draw_tiles(canvas, tiles, image_refs, tx_min, tx_max, ty_min, ty_max, origin_x, origin_y)
-        scale_x = scale_y = 1.0
-
-    cx_px, cy_px = lonlat_to_pixel(lat, lon, zoom)
-    cx = (cx_px - origin_x) * scale_x
-    cy = (cy_px - origin_y) * scale_y
-
-    canvas.create_oval(cx - 6, cy - 6, cx + 6, cy + 6,
-                       fill="#FFFFFF", outline="#000000", width=2)
+    canvas.create_oval(
+        cx - 6, cy - 6, cx + 6, cy + 6,
+        fill="#FFFFFF", outline="#000000", width=2, tags="overlay_layer",
+    )
 
     for ang, lbl in ((0, "N"), (90, "E"), (180, "S"), (270, "W")):
         rad = math.radians(ang)
         x = cx + (R + 14) * math.sin(rad)
         y = cy - (R + 14) * math.cos(rad)
-        canvas.create_text(x, y, text=lbl, fill="#000000",
-                           font=("Segoe UI", 8, "bold"), tags="overlay")
+        canvas.create_text(
+            x, y, text=lbl, fill="#000000",
+            font=("Segoe UI", 8, "bold"), tags="overlay_layer",
+        )
 
-    def arrow(az_deg: float, length: float, color: str, width: int,
-              lbl: str, lbl_color: str):
+    def arrow(az_deg: float, length: float, color: str, width: int, lbl: str, lbl_color: str):
         rad = math.radians(az_deg)
         ex = cx + length * math.sin(rad)
         ey = cy - length * math.cos(rad)
-        canvas.create_line(cx, cy, ex, ey, fill=color, width=width,
-                           arrow="last", arrowshape=(12, 14, 5), tags="overlay")
+        canvas.create_line(
+            cx, cy, ex, ey, fill=color, width=width,
+            arrow="last", arrowshape=(12, 14, 5), tags="overlay_layer",
+        )
         lx = cx + (length + 20) * math.sin(rad)
         ly = cy - (length + 20) * math.cos(rad)
-        canvas.create_text(lx, ly, text=lbl, fill=lbl_color,
-                           font=("Segoe UI", 8, "bold"), tags="overlay")
+        canvas.create_text(
+            lx, ly, text=lbl, fill=lbl_color,
+            font=("Segoe UI", 8, "bold"), tags="overlay_layer",
+        )
 
     if flight_az is not None:
         arrow(flight_az, R * 0.70, "#39FF14", 3, f"Az {flight_az:.0f}°", "#39FF14")
 
     if wind_dir is not None:
         wind_to = (wind_dir + 180) % 360
-        arrow(wind_to, R * 0.60, "#00BFFF", 3,
-              f"{wind_spd:.0f}{i18n.t('unit_kmh_short')}\n{wind_dir:.0f}°", "#00BFFF")
+        arrow(
+            wind_to, R * 0.60, "#00BFFF", 3,
+            f"{wind_spd:.0f}{i18n.t('unit_kmh_short')}\n{wind_dir:.0f}°", "#00BFFF",
+        )
 
         if flight_az is not None:
             diff = abs((wind_dir - flight_az + 360) % 360)
@@ -229,12 +218,42 @@ def render_area_map(canvas: tk.Canvas, lat: float, lon: float, zoom: int,
                 diff = 360 - diff
             cross = abs(90 - abs(diff - 90))
             color = "#FF4444" if cross > 30 else "#44FF88"
-            canvas.create_rectangle(4, H - 22, W - 4, H - 4,
-                                    fill="#000000", outline="", stipple="gray50", tags="overlay")
-            canvas.create_text(W // 2, H - 12, fill=color, font=("Segoe UI", 8, "bold"),
-                               text=i18n.t("weather_crosswind_map_label_fmt", cross=cross), tags="overlay")
+            canvas.create_rectangle(
+                4, H - 22, W - 4, H - 4,
+                fill="#000000", outline="", stipple="gray50", tags="overlay_layer",
+            )
+            canvas.create_text(
+                W // 2, H - 12, fill=color, font=("Segoe UI", 8, "bold"),
+                text=i18n.t("weather_crosswind_map_label_fmt", cross=cross), tags="overlay_layer",
+            )
 
     canvas.config(scrollregion=(0, 0, W, H))
+    return screen_origin_gx, screen_origin_gy
+
+
+def render_area_map(canvas: tk.Canvas, lat: float, lon: float, zoom: int,
+                    tiles: dict, image_refs: list,
+                    tx_min: int, tx_max: int, ty_min: int, ty_max: int,
+                    flight_az: float | None = None,
+                    wind_dir: float | None = None,
+                    wind_spd: float | None = None):
+    """
+    Синхронна (НЕ прогресивна) обгортка над begin_area_render()/
+    draw_single_tile() -- для місць, де всі тайли вже готові заздалегідь
+    і прогресивність не потрібна. Для нового мережевого завантаження
+    (analysis_page.py) використовуються ці дві функції окремо, кожен
+    тайл малюється одразу по готовності.
+    """
+    screen_origin_gx, screen_origin_gy = begin_area_render(
+        canvas, lat, lon, zoom, tx_min, tx_max, ty_min, ty_max, image_refs,
+        flight_az=flight_az, wind_dir=wind_dir, wind_spd=wind_spd,
+    )
+    for tx in range(tx_min, tx_max + 1):
+        for ty in range(ty_min, ty_max + 1):
+            draw_single_tile(
+                canvas, image_refs, tx, ty, tiles.get((tx, ty)),
+                screen_origin_gx, screen_origin_gy, raise_tag="overlay_layer",
+            )
 
 
 def _compose_scaled_width(tiles: dict, tx_min: int, tx_max: int, ty_min: int, ty_max: int,
