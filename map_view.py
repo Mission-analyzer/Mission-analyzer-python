@@ -52,16 +52,51 @@ class MapTooLargeError(Exception):
         super().__init__(f"too many tiles: {total}")
 
 
-def compute_tile_bounds(analyzer: MissionAnalyzer, zoom: int, max_tiles: int = 400):
-    """Считает диапазон тайлов под маршрут. Без сети и без Tkinter — можно звать откуда угодно."""
+def compute_tile_bounds(
+    analyzer: MissionAnalyzer, zoom: int, max_tiles: int = 400,
+    target_aspect: float | None = None,
+):
+    """
+    Считает диапазон тайлов под маршрут. Без сети и без Tkinter — можно
+    звать откуда угодно.
+
+    Класична задача "вписати прямокутник маршруту в прямокутник канваса"
+    БЕЗ спотворення пропорцій (єдиний коефіцієнт масштабу для X і Y):
+    - визначаємо, який із двох прямокутників (маршрут / канвас)
+      пропорційно "вертикальніший" -- порівнюємо їхні aspect ratio
+      (ширина/висота) напряму, як числа, без категорій
+      "портрет/ландшафт" (працює для будь-якої комбінації орієнтацій
+      обох прямокутників);
+    - якщо маршрут вертикальніший за канвас (route_aspect < canvas_
+      aspect) -- прив'язуємось по ВИСОТІ (вона й так впритул), а
+      ширину розширюємо, щоб дібрати запас по боках РЕАЛЬНОЮ картою
+      (не білим/сірим) до потрібних пропорцій;
+    - якщо маршрут горизонтальніший -- дзеркально, прив'язуємось по
+      ШИРИНІ, розширюємо висоту (запас зверху/знизу);
+    - якщо пропорції збігаються -- розширювати нічого не треба.
+
+    target_aspect (canvas_width / canvas_height), якщо задано --
+    розширює КОРОТШИЙ вимір діапазону тайлів (по X або Y, цілими
+    тайлами, СИМЕТРИЧНО з обох боків) так, щоб підсумкові пропорції
+    діапазону тайлів збігались із пропорціями канваса. Завдяки цьому
+    подальше масштабування ОДНИМ коефіцієнтом (_compose_scaled_width)
+    заповнює канвас повністю, без порожніх білих полів -- і БЕЗ
+    геометричного спотворення карти (принципово важливо для
+    планувальника місій: супутникові знімки/дороги не повинні виглядати
+    розтягнутими). Розширення -- лише ДОДАЄ область показу реальною
+    картою, ніколи не обрізає маршрут.
+    """
     pts = analyzer.nav_wps
     if not pts:
         raise ValueError("no points with coordinates")
 
     lats = [wp.lat for wp in pts]
     lons = [wp.lon for wp in pts]
-    pad_lat = max((max(lats) - min(lats)) * 0.15, 0.01)
-    pad_lon = max((max(lons) - min(lons)) * 0.15, 0.01)
+    # запас навколо маршруту без самої лінії -- 5% з кожного боку,
+    # мінімум лишається достатнім, щоб точки на самому краю не впирались
+    # у рамку канваса впритул
+    pad_lat = max((max(lats) - min(lats)) * 0.05, 0.002)
+    pad_lon = max((max(lons) - min(lons)) * 0.05, 0.002)
     lat_min, lat_max = min(lats) - pad_lat, max(lats) + pad_lat
     lon_min, lon_max = min(lons) - pad_lon, max(lons) + pad_lon
 
@@ -70,11 +105,72 @@ def compute_tile_bounds(analyzer: MissionAnalyzer, zoom: int, max_tiles: int = 4
     tx_min, tx_max = min(tx1, tx2), max(tx1, tx2)
     ty_min, ty_max = min(ty1, ty2), max(ty1, ty2)
 
+    if target_aspect is not None and target_aspect > 0:
+        cur_w = tx_max - tx_min + 1
+        cur_h = ty_max - ty_min + 1
+        cur_aspect = cur_w / cur_h
+        if cur_aspect < target_aspect:
+            # маршрут вертикальніший за канвас -- прив'язка по висоті,
+            # розширюємо ширину (запас по боках)
+            needed_w = max(int(round(cur_h * target_aspect)), cur_w)
+            extra = needed_w - cur_w
+            left = extra // 2
+            tx_min -= left
+            tx_max += extra - left
+        elif cur_aspect > target_aspect:
+            # маршрут горизонтальніший за канвас -- прив'язка по ширині,
+            # розширюємо висоту (запас зверху/знизу)
+            needed_h = max(int(round(cur_w / target_aspect)), cur_h)
+            extra = needed_h - cur_h
+            top = extra // 2
+            ty_min -= top
+            ty_max += extra - top
+
+        n = 2 ** zoom
+        tx_min = max(0, tx_min)
+        tx_max = min(n - 1, tx_max)
+        ty_min = max(0, ty_min)
+        ty_max = min(n - 1, ty_max)
+
     total = (tx_max - tx_min + 1) * (ty_max - ty_min + 1)
     if total > max_tiles:
         raise MapTooLargeError(total)
 
     return tx_min, tx_max, ty_min, ty_max, total
+
+
+def compute_viewport_tile_bounds(
+    center_lat: float, center_lon: float, zoom: int, canvas_w: int, canvas_h: int,
+    buffer_factor: float = 2.0,
+) -> tuple[int, int, int, int]:
+    """
+    Діапазон тайлів навколо КОНКРЕТНОЇ точки (не всього маршруту) --
+    основа "як у Mission Planner": на високому зумі довантажуємо лише
+    видиму (+запас buffer_factor) область навколо центру огляду, а не
+    весь маршрут одразу. Завдяки цьому кількість тайлів залежить від
+    розміру КАНВАСА, а не від довжини маршруту -- зум завжди доступний
+    аж до 19, незалежно від того, наскільки протяжна місія.
+
+    buffer_factor=2.0 -- запас для панорамування без миттєвого
+    дозавантаження (див. _on_map_press_edit/_on_map_release_edit-подібну
+    логіку панорамування в mission_page.py).
+    """
+    cx, cy = lonlat_to_pixel(center_lat, center_lon, zoom)
+    half_w = canvas_w * buffer_factor / 2
+    half_h = canvas_h * buffer_factor / 2
+
+    n = 2 ** zoom
+    max_px = n * TILE_SIZE
+    px_min = max(0, cx - half_w)
+    px_max = min(max_px, cx + half_w)
+    py_min = max(0, cy - half_h)
+    py_max = min(max_px, cy + half_h)
+
+    tx_min = int(px_min // TILE_SIZE)
+    tx_max = int(px_max // TILE_SIZE)
+    ty_min = int(py_min // TILE_SIZE)
+    ty_max = int(py_max // TILE_SIZE)
+    return tx_min, tx_max, ty_min, ty_max
 
 
 def fetch_tiles(
@@ -83,30 +179,53 @@ def fetch_tiles(
     progress_cb=None,
     cancel_event=None,
     max_workers: int = 6,
+    coords: list[tuple[int, int]] | None = None,
+    tile_ready_cb=None,
 ) -> tuple[dict, bool]:
     """
     Скачивает/читает все тайлы диапазона ПАРАЛЛЕЛЬНО (как это делает браузер).
     Никакого Tkinter здесь нет — безопасно звать из фонового потока, чтобы
     не подвешивать окно программы во время сетевых запросов.
 
+    coords -- якщо задано, явний список конкретних пар (tx,ty) замість
+    прямокутника tx_min..tx_max x ty_min..ty_max (наприклад, коли частина
+    тайлів уже є з іншого джерела -- див. analysis_page._load_trajectory_map,
+    де карта "Маршрут" довантажує лише те, чого бракує з карти "Місія",
+    а не весь діапазон заново).
+
+    tile_ready_cb(tx, ty, data) -- якщо задано, викликається ОДРАЗУ по
+    готовності КОЖНОГО окремого тайла (data -- bytes|None), не чекаючи
+    решти -- для прогресивної відмальовки (mission_page.py: кожен тайл
+    з'являється на екрані одразу, а не всі разом лише в кінці). Той
+    самий цикл as_completed, що вже й так обробляє тайли по мірі
+    готовності (не по порядку) -- просто тепер ще й повідомляє про
+    кожен окремо, а не лише лічильником done/total.
+
     Возвращает (словарь {(tx,ty): bytes|None}, отменено_ли).
     """
     import concurrent.futures
 
-    coords = [(tx, ty) for tx in range(tx_min, tx_max + 1) for ty in range(ty_min, ty_max + 1)]
+    if coords is None:
+        coords = [(tx, ty) for tx in range(tx_min, tx_max + 1) for ty in range(ty_min, ty_max + 1)]
     total = len(coords)
     tiles: dict = {}
     done = 0
     cancelled = False
+
+    if total == 0:
+        return tiles, cancelled
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {ex.submit(tile_cache.get_tile, zoom, tx, ty): (tx, ty) for tx, ty in coords}
         for fut in concurrent.futures.as_completed(futures):
             tx, ty = futures[fut]
             try:
-                tiles[(tx, ty)] = fut.result()
+                data = fut.result()
             except Exception:
-                tiles[(tx, ty)] = None
+                data = None
+            tiles[(tx, ty)] = data
+            if tile_ready_cb:
+                tile_ready_cb(tx, ty, data)
             done += 1
             if progress_cb:
                 progress_cb(done, total)
@@ -127,13 +246,14 @@ def render_tiles(
     tiles: dict,
     image_refs: list,
     overlay_polygons: list | None = None,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int, int]:
     """
     Рисует уже скачанные тайлы (см. fetch_tiles), опциональный слой полигонов
     (например, оккупированных территорий) поверх них, и маршрут поверх всего.
     Трогает Tkinter — звать только из главного потока.
 
-    Возвращает (отрисовано, всего, нет_в_кэше, не_декодировано).
+    Возвращает (отрисовано, всего, нет_в_кэше, не_декодировано,
+    ширина_картинки, висота_картинки).
     """
     canvas.delete("all")
     image_refs.clear()
@@ -184,7 +304,7 @@ def render_tiles(
     _center_on_route(canvas, route_px, grid_w, grid_h)
 
     missing = total - found - undecodable
-    return found, total, missing, undecodable
+    return found, total, missing, undecodable, grid_w, grid_h
 
 
 def _compose_scaled_fit(tiles: dict, tx_min: int, tx_max: int, ty_min: int, ty_max: int,
@@ -226,7 +346,7 @@ def _compose_scaled_fit(tiles: dict, tx_min: int, tx_max: int, ty_min: int, ty_m
     scale = min(target_w / grid_w, target_h / grid_h)
     draw_w = max(int(grid_w * scale), 1)
     draw_h = max(int(grid_h * scale), 1)
-    resized = mosaic.resize((draw_w, draw_h), Image.LANCZOS)
+    resized = mosaic.resize((draw_w, draw_h), Image.BILINEAR)
 
     canvas_img = Image.new("RGB", (target_w, target_h), bg_color)
     offset_x = (target_w - draw_w) // 2
@@ -276,10 +396,197 @@ def _compose_scaled_width(tiles: dict, tx_min: int, tx_max: int, ty_min: int, ty
     scale = target_w / grid_w
     draw_w = target_w
     draw_h = max(int(grid_h * scale), 1)
-    resized = mosaic.resize((draw_w, draw_h), Image.LANCZOS)
+    # BILINEAR замість LANCZOS -- при сильному зменшенні (велика мозаїка
+    # тайлів стискається під ширину екрана) LANCZOS давав приблизно
+    # секунду тільки на цей крок (виміряно [timing]-логами), BILINEAR
+    # у кілька разів швидший при практично непомітній різниці якості
+    # для супутникових/OSM-тайлів на такому масштабі стиснення.
+    resized = mosaic.resize((draw_w, draw_h), Image.BILINEAR)
 
     photo = ImageTk.PhotoImage(resized)
     return photo, scale
+
+
+def begin_viewport_render(
+    canvas: tk.Canvas,
+    analyzer: MissionAnalyzer,
+    zoom: int,
+    center_lat: float, center_lon: float,
+    tx_min: int, tx_max: int, ty_min: int, ty_max: int,
+    image_refs: list,
+    overlay_polygons: list | None = None,
+    placeholder_bg: str = "#cccccc",
+    placeholder_outline: str = "#aaaaaa",
+) -> tuple[float, float]:
+    """
+    Перший крок прогресивної відмальовки "вікна в карту" (mission_page.py:
+    кожен тайл з'являється на екрані одразу по готовності, а не всі
+    разом лише в кінці -- уникає "порожнього білого екрана" на час
+    завантаження). Викликається ОДИН раз, синхронно, ще ДО того, як
+    почалось власне мережеве завантаження тайлів:
+    - очищає канвас і малює ПЛЕЙСХОЛДЕРИ на місці КОЖНОГО тайла (щоб
+      одразу було видно структуру сітки й маршрут, а не пустечу).
+      placeholder_bg/placeholder_outline -- кольори ПІД ПОТОЧНУ ТЕМУ
+      (передаються з mission_page.py, той самий колір, що й фон самого
+      канваса, c["map_placeholder_bg"]) -- інакше в темній темі при
+      кожному новому рендері мигав би контрастний СВІТЛО-СІРИЙ
+      прямокутник на місці кожного ще не завантаженого тайла;
+    - малює полігони окупованих територій і сам маршрут (лінія + точки)
+      ОДРАЗУ, поверх плейсхолдерів -- це найважливіший вміст, він не
+      повинен чекати завантаження тайлів;
+    - тег "route_layer" на всіх елементах маршруту -- потрібен, щоб
+      draw_single_tile() міг піднімати маршрут НАД щойно домальованим
+      тайлом (інакше кожен новий тайл малювався б ПОВЕРХ лінії/точок,
+      ховаючи їх -- порядок canvas-об'єктів = порядок створення).
+
+    Повертає (screen_origin_gx, screen_origin_gy) -- зберегти й
+    передавати в кожен наступний виклик draw_single_tile() для цього
+    самого рендеру.
+    """
+    canvas.update_idletasks()
+    canvas_w = max(canvas.winfo_width(), 100)
+    canvas_h = max(canvas.winfo_height(), 100)
+
+    canvas.delete("all")
+    image_refs.clear()
+
+    center_gx, center_gy = lonlat_to_pixel(center_lat, center_lon, zoom)
+    screen_origin_gx = center_gx - canvas_w / 2
+    screen_origin_gy = center_gy - canvas_h / 2
+
+    for tx in range(tx_min, tx_max + 1):
+        for ty in range(ty_min, ty_max + 1):
+            px = tx * TILE_SIZE - screen_origin_gx
+            py = ty * TILE_SIZE - screen_origin_gy
+            canvas.create_rectangle(
+                px, py, px + TILE_SIZE, py + TILE_SIZE,
+                fill=placeholder_bg, outline=placeholder_outline, tags=(f"tile_{tx}_{ty}",),
+            )
+
+    if overlay_polygons:
+        _draw_polygon_overlay(canvas, overlay_polygons, zoom, screen_origin_gx, screen_origin_gy)
+
+    _draw_route(canvas, analyzer, zoom, screen_origin_gx, screen_origin_gy)
+    canvas.addtag_withtag("route_layer", "wp_marker")
+    canvas.addtag_withtag("route_layer", "wp_line")
+
+    canvas.config(scrollregion=(0, 0, canvas_w, canvas_h))
+    return screen_origin_gx, screen_origin_gy
+
+
+def draw_single_tile(
+    canvas: tk.Canvas,
+    image_refs: list,
+    tx: int, ty: int,
+    data: bytes | None,
+    screen_origin_gx: float, screen_origin_gy: float,
+    raise_tag: str = "route_layer",
+) -> str:
+    """
+    Другий крок прогресивної відмальовки -- викликається ОКРЕМО на
+    КОЖЕН тайл по готовності (mission_page.py: self.after(0, ...) на
+    кожен тайл, з перевіркою покоління рендеру ПЕРЕД викликом -- щоб
+    застарілий результат від попереднього (вже неактуального) зуму не
+    домалювався поверх нового). Замінює сірий плейсхолдер цієї позиції
+    (тег "tile_{tx}_{ty}", проставлений в begin_viewport_render) на
+    реальне зображення тайла -- чи на позначку помилки, якщо байтів
+    немає чи вони не розпізнались.
+
+    Піднімає raise_tag (за замовчуванням "route_layer" -- лінію/точки
+    маршруту на "Місія"; для area-карт Взліт/Посадка передається
+    "overlay_layer" -- компас/стрілки азимуту-вітру, там маршруту
+    немає) НАД щойно доданим тайлом -- інакше кожен новий тайл
+    малювався б поверх цього вмісту, ховаючи його (порядок canvas-
+    об'єктів = порядок створення).
+
+    Повертає "found" / "undecodable" / "missing" -- для підрахунку
+    статистики в _on_render_finish (mission_page.py), той самий сенс,
+    що й found/undecodable у старому render_viewport.
+    """
+    tag = f"tile_{tx}_{ty}"
+    px = tx * TILE_SIZE - screen_origin_gx
+    py = ty * TILE_SIZE - screen_origin_gy
+
+    canvas.delete(tag)
+
+    result = "missing"
+    if data is not None:
+        img = _decode_tile_image(data)
+        if img is not None:
+            image_refs.append(img)
+            canvas.create_image(px, py, image=img, anchor="nw", tags=(tag,))
+            result = "found"
+        else:
+            canvas.create_rectangle(
+                px, py, px + TILE_SIZE, py + TILE_SIZE,
+                fill="#ffe0b3", outline="#cc9955", tags=(tag,),
+            )
+            canvas.create_text(
+                px + TILE_SIZE / 2, py + TILE_SIZE / 2,
+                text=i18n.t("map_jpeg_no_pillow"), font=("Arial", 8), fill="#996633", tags=(tag,),
+            )
+            result = "undecodable"
+    else:
+        canvas.create_rectangle(
+            px, py, px + TILE_SIZE, py + TILE_SIZE,
+            fill="#cccccc", outline="#aaaaaa", tags=(tag,),
+        )
+        canvas.create_text(
+            px + TILE_SIZE / 2, py + TILE_SIZE / 2,
+            text=i18n.t("map_no_tile"), font=("Arial", 8), fill="#777777", tags=(tag,),
+        )
+
+    canvas.tag_raise(raise_tag)
+    return result
+
+
+def render_viewport(
+    canvas: tk.Canvas,
+    analyzer: MissionAnalyzer,
+    zoom: int,
+    center_lat: float, center_lon: float,
+    tx_min: int, tx_max: int, ty_min: int, ty_max: int,
+    tiles: dict,
+    image_refs: list,
+    overlay_polygons: list | None = None,
+) -> tuple[int, int, int, int, int, int]:
+    """
+    "Вікно в карту" навколо (center_lat, center_lon) -- як у Mission
+    Planner: тайли позиціонуються так, щоб ця геоточка опинилась РІВНО
+    в центрі КАНВАСА. Синхронна, НЕ прогресивна версія -- всі тайли вже
+    ГОТОВІ заздалегідь (tiles dict повний) і малюються одразу, без
+    поетапного заповнення. Для нового мережевого завантаження (mission_
+    page.py: worker() качає тайли й показує кожен одразу по готовності)
+    використовуються begin_viewport_render()/draw_single_tile() окремо
+    -- ця функція лишається як проста синхронна обгортка над ними, для
+    місць, де прогресивність не потрібна (напр. analysis_page.py: карта
+    "Маршрут" бере вже повністю готовий набір тайлів з "Місія" -- там
+    попроцесно малювати нема сенсу, усе й так одразу в пам'яті).
+
+    Повертає (відрисовано, всього, нет_в_кеші, не_декодировано,
+    screen_origin_gx, screen_origin_gy) -- останні два: глобальні
+    пікселі (у системі lonlat_to_pixel цього zoom), що відповідають
+    ЕКРАННІЙ (0,0) канваса -- потрібні для перетворення координат миші
+    в lat/lon (drag точок, підказка при наведенні тощо, той самий
+    формат, що очікує mission_editor.py).
+    """
+    screen_origin_gx, screen_origin_gy = begin_viewport_render(
+        canvas, analyzer, zoom, center_lat, center_lon,
+        tx_min, tx_max, ty_min, ty_max, image_refs, overlay_polygons,
+    )
+
+    found = undecodable = 0
+    total = (tx_max - tx_min + 1) * (ty_max - ty_min + 1)
+    for tx in range(tx_min, tx_max + 1):
+        for ty in range(ty_min, ty_max + 1):
+            result = draw_single_tile(canvas, image_refs, tx, ty, tiles.get((tx, ty)), screen_origin_gx, screen_origin_gy)
+            if result == "found":
+                found += 1
+            elif result == "undecodable":
+                undecodable += 1
+
+    missing = total - found - undecodable
+    return found, total, missing, undecodable, int(screen_origin_gx), int(screen_origin_gy)
 
 
 def render_tiles_fit(
@@ -290,14 +597,18 @@ def render_tiles_fit(
     tiles: dict,
     image_refs: list,
     overlay_polygons: list | None = None,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int, int]:
     """
     Те саме, що render_tiles, але карта масштабується ТОЧНО ПО ШИРИНІ
-    канваса (як на сторінці "Аналіз", тільки без обмеження по висоті --
-    див. _compose_scaled_width). Завдяки цьому карта завжди рівно на
-    ширину вікна незалежно від того, скільки висоти реально лишилось
-    (висота вікна -- це те, що не можна "домовити" підгонкою розміру
-    контейнера, як показала спроба з self._map_aspect_ratio).
+    канваса, ОДНИМ коефіцієнтом (_compose_scaled_width, без спотворення
+    пропорцій -- супутникові знімки/дороги не виглядають розтягнутими).
+
+    Заповнення канваса без порожніх білих полів досягається РАНІШЕ, на
+    рівні compute_tile_bounds(target_aspect=...): та функція вже
+    розширює коротший вимір діапазону тайлів під пропорції канваса
+    (симетрично з обох боків, реальною картою, не білим) -- тому
+    просте масштабування "рівно по ширині" тут автоматично заповнює й
+    висоту теж.
 
     Якщо Pillow не встановлено -- тихо повертається до старої поведінки
     (render_tiles, натуральний розмір + скрол), бо без Pillow нема чим
@@ -313,11 +624,11 @@ def render_tiles_fit(
             canvas, analyzer, zoom, tx_min, tx_max, ty_min, ty_max, tiles, image_refs,
             overlay_polygons=overlay_polygons,
         )
+    photo, scale = composed
 
     canvas.delete("all")
     image_refs.clear()
 
-    photo, scale = composed
     image_refs.append(photo)
     canvas.create_image(0, 0, image=photo, anchor="nw")
 
@@ -338,7 +649,7 @@ def render_tiles_fit(
     draw_h = photo.height()
     canvas.config(scrollregion=(0, 0, draw_w, draw_h))
 
-    return found, total, missing, undecodable
+    return found, total, missing, undecodable, draw_w, draw_h
 
 
 def _draw_polygon_overlay(
@@ -358,9 +669,9 @@ def _draw_polygon_overlay(
     тайлов. Дырки в полигонах игнорируются (только внешний контур) — это
     для общей наглядности, не для точных измерений границы.
 
-    scale/offset_x/offset_y -- те саме масштабування "letterbox", що й
-    для тайлів у render_tiles_fit (за замовчуванням 1.0/0/0 -- без змін,
-    для старого render_tiles із натуральним розміром).
+    scale/offset_x/offset_y -- те саме масштабування, що й для тайлів у
+    render_tiles_fit (за замовчуванням 1.0/0/0 -- без змін, для старого
+    render_tiles із натуральним розміром).
     """
     for poly in polygons:
         if not poly:
@@ -383,6 +694,12 @@ def _draw_route(
     scale/offset_x/offset_y -- те саме масштабування "letterbox", що й
     для тайлів у render_tiles_fit (за замовчуванням 1.0/0/0 -- без змін,
     для старого render_tiles із натуральним розміром).
+
+    Кожен маркер точки й кожен відрізок лінії між сусідніми точками
+    отримують ВЛАСНІ теги ("wp_marker_<index>" / "wp_line_<index>") --
+    потрібно для редактора місії (перетягування точки мишею): за тегом
+    можна знайти й пересунути саме ці canvas-об'єкти напряму, без
+    перемальовки всієї мозаїки тайлів на кожен рух миші.
     """
     issues_by_wp: dict[int, list[str]] = {}
     for it in analyzer.issues:
@@ -394,14 +711,24 @@ def _draw_route(
         route_px.append(((gx - origin_x) * scale + offset_x, (gy - origin_y) * scale + offset_y, wp))
 
     for i in range(len(route_px) - 1):
-        x1, y1, _ = route_px[i]
-        x2, y2, _ = route_px[i + 1]
-        canvas.create_line(x1, y1, x2, y2, fill="#1f77b4", width=3)
+        x1, y1, wp1 = route_px[i]
+        x2, y2, wp2 = route_px[i + 1]
+        canvas.create_line(
+            x1, y1, x2, y2, fill="#1f77b4", width=3,
+            tags=("wp_line", f"wp_line_{wp1.index}_{wp2.index}"),
+        )
 
     for x, y, wp in route_px:
         color = "#d62728" if wp.index in issues_by_wp else "#1f77b4"
-        canvas.create_oval(x - 6, y - 6, x + 6, y + 6, fill=color, outline="white", width=1)
-        canvas.create_text(x, y - 12, text=str(wp.index), font=("Arial", 8, "bold"))
+        marker_tag = f"wp_marker_{wp.index}"
+        canvas.create_oval(
+            x - 6, y - 6, x + 6, y + 6, fill=color, outline="white", width=1,
+            tags=("wp_marker", marker_tag),
+        )
+        canvas.create_text(
+            x, y - 12, text=str(wp.index), font=("Arial", 8, "bold"),
+            tags=("wp_marker", marker_tag),
+        )
 
     return [(x, y) for x, y, _ in route_px]
 
