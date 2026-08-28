@@ -730,6 +730,7 @@ _TR: dict[str, dict[str, str]] = {
     "btn_edit_mission": {"uk": "Редагувати", "en": "Edit"},
     "btn_stop_editing": {"uk": "Завершити редагування", "en": "Stop editing"},
     "ctx_add_waypoint": {"uk": "Додати точку", "en": "Add waypoint"},
+    "ctx_copy": {"uk": "Копіювати", "en": "Copy"},
     "ctx_add_command": {"uk": "Додати команду", "en": "Add command"},
     "dlg_choose_command_title": {"uk": "Оберіть команду", "en": "Choose command"},
     "btn_ok": {"uk": "OK", "en": "OK"},
