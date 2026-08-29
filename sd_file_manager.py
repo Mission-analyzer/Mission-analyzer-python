@@ -26,6 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 import i18n
+import theme
 
 
 class SDFileManagerMixin:
@@ -117,6 +118,14 @@ class SDFileManagerMixin:
         dlg.title(i18n.t("dlg_sd_files_title"))
         dlg.geometry("640x520")
         dlg.transient(self)
+        # ВАЖЛИВО: tk.Toplevel НЕ підхоплює загальну тему автоматично
+        # (на відміну від ttk.Treeview/ttk.Frame всередині нього, ті
+        # стилізуються через глобальний ttk.Style) -- без явного bg=
+        # саме вікно лишалось системним світлим незалежно від теми
+        # застосунку, тоді як текст у Treeview брав колір з теми
+        # (світлий у темній темі) -- звідси "білий текст на білому тлі".
+        _pal = theme.PALETTE_DARK if self._is_dark_theme() else theme.PALETTE_LIGHT
+        dlg.configure(bg=_pal["bg"])
 
         path_var = tk.StringVar(value="/")
         status_var = tk.StringVar(value="")
