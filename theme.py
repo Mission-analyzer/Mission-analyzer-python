@@ -181,6 +181,33 @@ def apply_theme(root: tk.Tk, dark: bool = False) -> dict:
         foreground=NAVY if not dark else "#7fa8d9", font=bold_font,
     )
 
+    # Treeview -- БЕЗЫМЕННИЙ (дефолтний) стиль, для будь-якого дерева/
+    # таблиці в проєкті, що НЕ використовує власний іменований стиль
+    # (напр. mission_table навмисне має власний "MissionBlack.Treeview"
+    # з додатковими кольорами виділення -- цей блок його не чіпає).
+    # ВАЖЛИВО: у темі "clam" ttk.Treeview має ОКРЕМИЙ від загального
+    # "background" параметр -- "fieldbackground" (колір області з самими
+    # рядками) -- він НЕ успадковується від style.configure(".", ...)
+    # вище автоматично. Без явного налаштування САМЕ "fieldbackground"
+    # тут -- дерево лишається з дефолтним (зазвичай білим) кольором
+    # реалізації теми "clam", тоді як текст (foreground) успадковується
+    # коректно -- звідси "світлий текст на білому тлі" в темній темі
+    # (реальний баг, знайдений і підтверджений на живому застосунку:
+    # діалог "Файли SD" -- sd_file_manager.py, там Treeview створюється
+    # без style= взагалі).
+    style.configure(
+        "Treeview", background=colors["bg"], fieldbackground=colors["bg"], foreground=colors["text"],
+    )
+    style.map(
+        "Treeview",
+        background=[("selected", colors["blue"])],
+        foreground=[("selected", "white")],
+    )
+    style.configure(
+        "Treeview.Heading", background=colors["panel"], foreground=colors["text"], relief="flat",
+    )
+    style.map("Treeview.Heading", background=[("active", colors["border"])])
+
     style.configure("TEntry", fieldbackground=colors["panel"], foreground=colors["text"], bordercolor=colors["border"])
     style.configure(
         "TSpinbox", fieldbackground=colors["panel"], foreground=colors["text"],
