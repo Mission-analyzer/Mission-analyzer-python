@@ -156,7 +156,6 @@ class SDFileManagerMixin:
             b.pack(side="left", padx=(0, 6))
 
         ttk.Label(dlg, textvariable=status_var, foreground="#555").pack(fill="x", padx=8)
-        ttk.Button(dlg, text=i18n.t("btn_close"), command=dlg.destroy).pack(pady=(4, 8))
 
         all_buttons = [up_btn, preview_btn, graph_btn, download_btn, upload_btn, delete_btn, refresh_btn]
 
@@ -541,9 +540,8 @@ class SDFileManagerMixin:
         widget = scrolledtext.ScrolledText(dlg, wrap="none" if is_binary else "word", font=("Consolas", 9))
         widget.pack(fill="both", expand=True, padx=8, pady=8)
         widget.insert("end", text_content)
-        widget.config(state="disabled")
+        theme.make_text_readonly(widget)
 
-        ttk.Button(dlg, text=i18n.t("btn_close"), command=dlg.destroy).pack(pady=(0, 8))
         dlg.grab_set()
 
 
@@ -672,7 +670,6 @@ class SDFileManagerMixin:
                 lambda _e, c=canvas, s=series, col=color: self._draw_log_series(c, s, col),
             )
 
-        ttk.Button(dlg, text=i18n.t("btn_close"), command=dlg.destroy).pack(pady=8)
         dlg.grab_set()
 
 
