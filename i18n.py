@@ -578,6 +578,15 @@ _TR: dict[str, dict[str, str]] = {
     "btn_write": {"uk": "Записати", "en": "Write"},
     "btn_close": {"uk": "Закрити", "en": "Close"},
     "status_fetching_info": {"uk": "Отримання інформації...", "en": "Fetching info..."},
+    "status_info_step_version": {"uk": "Запит версії прошивки...", "en": "Requesting firmware version..."},
+    "status_info_step_sensors": {"uk": "Запит датчиків...", "en": "Requesting sensors..."},
+    "status_info_step_storage": {"uk": "Запит SD-карти...", "en": "Requesting SD card info..."},
+    "status_info_step_files": {"uk": "Отримання списку файлів...", "en": "Fetching file list..."},
+    "status_info_step_scripts": {"uk": "Сканування APM/scripts...", "en": "Scanning APM/scripts..."},
+    "status_info_step_script_file_fmt": {
+        "uk": "Скрипт {name} ({done}/{total})...",
+        "en": "Script {name} ({done}/{total})...",
+    },
     "dlg_flight_info_title": {
         "uk": "Інформація про політний контролер",
         "en": "Flight controller info",
@@ -619,6 +628,24 @@ _TR: dict[str, dict[str, str]] = {
         "en": "Speed: read {read:.1f} MB/s, write {write:.1f} MB/s",
     },
     "info_section_files": {"uk": "Файли на SD-карті (корінь)", "en": "Files on SD card (root)"},
+    "info_section_scripts": {"uk": "Скриптові команди (APM/scripts)", "en": "Scripted commands (APM/scripts)"},
+    "info_no_scripted_commands": {
+        "uk": "Немає жодного .lua на APM/scripts (чи папка недоступна)",
+        "en": "No .lua files on APM/scripts (or folder unavailable)",
+    },
+    "info_script_file_fmt": {"uk": "{name}:", "en": "{name}:"},
+    "info_script_no_markup": {
+        "uk": "без розмітки MCP-COMMAND (файл прочитано, команд не знайдено)",
+        "en": "no MCP-COMMAND markup (file read, no commands found)",
+    },
+    "info_script_cmd_embed_fmt": {
+        "uk": "Команда {cmd} \"{name}\" -- вбудувати як NAV_SCRIPT_TIME (42702), param1={cmd}:",
+        "en": "Command {cmd} \"{name}\" -- embed as NAV_SCRIPT_TIME (42702), param1={cmd}:",
+    },
+    "info_script_param_fmt": {
+        "uk": "{slot} = {label} ({unit})",
+        "en": "{slot} = {label} ({unit})",
+    },
     "info_no_files": {"uk": "Порожньо", "en": "Empty"},
     "info_ftp_not_supported": {
         "uk": "Контролер не підтримує MAVLink FTP -- список файлів недоступний",
@@ -644,6 +671,41 @@ _TR: dict[str, dict[str, str]] = {
 
     # --- файловий менеджер SD-карти ---
     "btn_sd_files": {"uk": "Файли SD", "en": "SD Files"},
+    "btn_scripted_commands": {"uk": "Команди", "en": "Commands"},
+    "dlg_scripted_commands_title": {"uk": "Команди місії", "en": "Mission commands"},
+    "msg_scripted_commands_confirm_body": {
+        "uk": (
+            "Перевірка займе деякий час (перебираються ~186 команд по черзі, "
+            "кожна -- окремий запит до контролера). Поточна місія на платі буде "
+            "ТИМЧАСОВО замінена тестовими під час перевірки й автоматично "
+            "відновлена одразу після завершення.\n\nПродовжити?"
+        ),
+        "en": (
+            "This will take a while (about 186 commands tested one by one, each "
+            "a separate round-trip to the controller). The current mission on the "
+            "board will be TEMPORARILY replaced with test missions during the scan "
+            "and automatically restored right after it finishes.\n\nContinue?"
+        ),
+    },
+    "status_scanning_commands": {"uk": "Перевірка команд місії...", "en": "Checking mission commands..."},
+    "status_scanning_backup_mission": {
+        "uk": "Резервне копіювання поточної місії...", "en": "Backing up current mission...",
+    },
+    "status_scanning_command_fmt": {
+        "uk": "Перевірка {name} ({done}/{total})...", "en": "Checking {name} ({done}/{total})...",
+    },
+    "status_scanning_restore_mission": {
+        "uk": "Відновлення поточної місії...", "en": "Restoring current mission...",
+    },
+    "msg_scripted_commands_backup_failed": {
+        "uk": "Не вдалося зробити резервну копію поточної місії -- перевірку скасовано.",
+        "en": "Could not back up the current mission -- scan cancelled.",
+    },
+    "info_section_mission_commands": {"uk": "Результати перевірки", "en": "Scan results"},
+    "info_mission_commands_accepted_fmt": {
+        "uk": "Підтримується як елемент місії (ACCEPTED) -- {count} команд:",
+        "en": "Supported as a mission item (ACCEPTED) -- {count} commands:",
+    },
     "dlg_sd_files_title": {"uk": "Файли на SD-карті", "en": "SD card files"},
     "col_name": {"uk": "Ім'я", "en": "Name"},
     "col_size": {"uk": "Розмір, Б", "en": "Size, B"},
@@ -731,6 +793,53 @@ _TR: dict[str, dict[str, str]] = {
     "btn_stop_editing": {"uk": "Завершити редагування", "en": "Stop editing"},
     "ctx_add_waypoint": {"uk": "Додати точку", "en": "Add waypoint"},
     "ctx_copy": {"uk": "Копіювати", "en": "Copy"},
+
+    # MAV_TYPE (43 значення, 0..42) -- переклад типу апарату для шапки
+    # звіту Info (ardupilot_link.py: _format_flight_info). Ключ -- за
+    # числовим ID (не за назвою enum) -- надійніше, ID не змінюється.
+    "mav_type_0": {"uk": "Загальний", "en": "Generic"},
+    "mav_type_1": {"uk": "Літак (крило)", "en": "Fixed-wing"},
+    "mav_type_2": {"uk": "Квадрокоптер", "en": "Quadcopter"},
+    "mav_type_3": {"uk": "Коаксіальний гвинт", "en": "Coaxial"},
+    "mav_type_4": {"uk": "Гелікоптер", "en": "Helicopter"},
+    "mav_type_5": {"uk": "Трекер антени", "en": "Antenna tracker"},
+    "mav_type_6": {"uk": "Наземна станція керування", "en": "Ground control station"},
+    "mav_type_7": {"uk": "Дирижабль", "en": "Airship"},
+    "mav_type_8": {"uk": "Аеростат", "en": "Free balloon"},
+    "mav_type_9": {"uk": "Ракета", "en": "Rocket"},
+    "mav_type_10": {"uk": "Наземний ровер", "en": "Ground rover"},
+    "mav_type_11": {"uk": "Надводний човен", "en": "Surface boat"},
+    "mav_type_12": {"uk": "Підводний апарат", "en": "Submarine"},
+    "mav_type_13": {"uk": "Гексакоптер", "en": "Hexacopter"},
+    "mav_type_14": {"uk": "Октокоптер", "en": "Octocopter"},
+    "mav_type_15": {"uk": "Трикоптер", "en": "Tricopter"},
+    "mav_type_16": {"uk": "Махолот", "en": "Flapping wing"},
+    "mav_type_17": {"uk": "Повітряний змій", "en": "Kite"},
+    "mav_type_18": {"uk": "Бортовий контролер", "en": "Onboard controller"},
+    "mav_type_19": {"uk": "VTOL, два ротори", "en": "VTOL duo-rotor"},
+    "mav_type_20": {"uk": "VTOL, чотири ротори", "en": "VTOL quad-rotor"},
+    "mav_type_21": {"uk": "VTOL з поворотними роторами", "en": "VTOL tiltrotor"},
+    "mav_type_22": {"uk": "Зарезервовано (VTOL)", "en": "Reserved (VTOL)"},
+    "mav_type_23": {"uk": "Зарезервовано (VTOL)", "en": "Reserved (VTOL)"},
+    "mav_type_24": {"uk": "Зарезервовано (VTOL)", "en": "Reserved (VTOL)"},
+    "mav_type_25": {"uk": "Зарезервовано (VTOL)", "en": "Reserved (VTOL)"},
+    "mav_type_26": {"uk": "Підвіс камери", "en": "Gimbal"},
+    "mav_type_27": {"uk": "ADS-B передавач", "en": "ADS-B transponder"},
+    "mav_type_28": {"uk": "Парафоіл", "en": "Parafoil"},
+    "mav_type_29": {"uk": "Додекакоптер (12 роторів)", "en": "Dodecarotor"},
+    "mav_type_30": {"uk": "Камера", "en": "Camera"},
+    "mav_type_31": {"uk": "Зарядна станція", "en": "Charging station"},
+    "mav_type_32": {"uk": "FLARM-приймач", "en": "FLARM"},
+    "mav_type_33": {"uk": "Сервопривід", "en": "Servo"},
+    "mav_type_34": {"uk": "Модуль Open Drone ID", "en": "Open Drone ID module"},
+    "mav_type_35": {"uk": "Декакоптер (10 роторів)", "en": "Decarotor"},
+    "mav_type_36": {"uk": "Батарея", "en": "Battery"},
+    "mav_type_37": {"uk": "Парашут", "en": "Parachute"},
+    "mav_type_38": {"uk": "Пристрій логування", "en": "Logging device"},
+    "mav_type_39": {"uk": "Пристрій OSD", "en": "OSD device"},
+    "mav_type_40": {"uk": "Інерціальний вимірювач (IMU)", "en": "IMU"},
+    "mav_type_41": {"uk": "GPS-приймач", "en": "GPS receiver"},
+    "mav_type_42": {"uk": "Лебідка", "en": "Winch"},
     "ctx_add_command": {"uk": "Додати команду", "en": "Add command"},
     "dlg_choose_command_title": {"uk": "Оберіть команду", "en": "Choose command"},
     "btn_ok": {"uk": "OK", "en": "OK"},
