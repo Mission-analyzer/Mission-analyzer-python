@@ -10,9 +10,84 @@ version.py + changelog.py — обидва були зовсім маленьк�
 
 from __future__ import annotations
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
+AUTHOR = "Sergey Gorbachevsky"
 
 ENTRIES = [
+    {
+        "version": "1.0.4",
+        "date": "2026-08-29",
+        "uk": (
+            "Кнопка «Info» тепер правильно визначає тип апарату навіть коли "
+            "на тій самій шині MAVLink є інші пристрої (ADS-B приймач, гімбал, "
+            "компаньйон-комп'ютер) — раніше їхній HEARTBEAT міг випадково "
+            "перезаписати дані автопілота, і замість реального типу апарату "
+            "показувалось щось на кшталт «INVALID / ADS-B передавач».\n\n"
+            "Нова кнопка «Команди» (поруч із «Файли SD») — перевіряє, які саме "
+            "команди MAV_CMD реально приймає ПІДКЛЮЧЕНА ЗАРАЗ плата як елемент "
+            "місії (не за документацією, а живим тестом): завантажує короткі "
+            "тестові місії по черзі для кожної команди, дивиться на відповідь "
+            "контролера. Поточна місія на платі тимчасово підмінюється й "
+            "автоматично відновлюється одразу після завершення перевірки. "
+            "Прогрес видно в рядку стану по кожній команді окремо.\n\n"
+            "Кнопка «Info» також тепер сканує SD-карту (APM/scripts/) на "
+            "власні Lua-скрипти з розпізнаваною розміткою (MCP-COMMAND) — "
+            "якщо десь підключений скрипт додає власні команди в місію (напр. "
+            "приклад «Змійка», що додається окремим файлом), у звіті одразу "
+            "видно, з якими параметрами й як їх вставити. Для скриптів без "
+            "розмітки звіт чесно показує «без розмітки», а не мовчить.\n\n"
+            "Копіювання тексту (Ctrl+C, права кнопка миші) полагоджено в усіх "
+            "діалогах програми одразу, не по одному — причина була в тому, що "
+            "прив'язка спрацьовувала лише на латинській розкладці клавіатури; "
+            "тепер визначається за фізичною клавішею, а не символом, який вона "
+            "друкує в поточній розкладці.\n\n"
+            "Прибрано кнопку «Закрити» з усіх діалогів (дублювала звичайний "
+            "хрестик у кутку вікна).\n\n"
+            "Виправлено помилку в перемальовці карти після правок у "
+            "редакторі місії — раніше кожна дрібна зміна (додавання чи "
+            "видалення точки) непотрібно перезавантажувала всі тайли карти "
+            "заново; тепер оновлюється лише сама лінія маршруту.\n\n"
+            "Номери точок на карті тепер завжди білі, незалежно від теми "
+            "застосунку (раніше могли зливатися з темними ділянками карти)."
+        ),
+        "en": (
+            "The \"Info\" button now correctly detects the vehicle type even "
+            "when other devices share the same MAVLink bus (an ADS-B receiver, "
+            "a gimbal, a companion computer) — previously their HEARTBEAT could "
+            "accidentally overwrite the autopilot's own data, showing something "
+            "like \"INVALID / ADS-B transponder\" instead of the real vehicle "
+            "type.\n\n"
+            "New \"Commands\" button (next to \"SD Files\") — checks which "
+            "MAV_CMD commands the CURRENTLY CONNECTED board actually accepts "
+            "as a mission item (a live test, not just documentation): uploads "
+            "short test missions one by one for each command and reads the "
+            "controller's response. The current mission on the board is "
+            "temporarily swapped out and automatically restored right after "
+            "the scan finishes. Progress is shown in the status bar for each "
+            "command individually.\n\n"
+            "The \"Info\" button also now scans the SD card (APM/scripts/) for "
+            "custom Lua scripts with recognizable markup (MCP-COMMAND) — if a "
+            "connected script adds its own mission commands (e.g. the \"Snake\" "
+            "example, distributed as a separate file), the report immediately "
+            "shows what parameters to use and how to embed them. For scripts "
+            "without markup, the report honestly says \"no markup found\" "
+            "instead of staying silent.\n\n"
+            "Text copying (Ctrl+C, right-click) fixed across every dialog in "
+            "the app at once, not one at a time — the underlying cause was "
+            "that the shortcut only worked on a Latin keyboard layout; it's "
+            "now detected by physical key position rather than the character "
+            "that key types in the current layout.\n\n"
+            "Removed the \"Close\" button from every dialog (it duplicated the "
+            "regular X in the window's corner).\n\n"
+            "Fixed a bug in map redrawing after mission editor changes — "
+            "previously every small edit (adding or deleting a point) "
+            "needlessly reloaded all map tiles from scratch; now only the "
+            "route line itself is updated.\n\n"
+            "Waypoint numbers on the map are now always white, regardless of "
+            "the app's theme (previously they could blend into dark areas of "
+            "the map)."
+        ),
+    },
     {
         "version": "1.0.3",
         "date": "2026-08-27",
