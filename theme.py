@@ -15,6 +15,8 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+import i18n
+
 # Палитра в духе Mission Planner: тёмно-синяя шапка/тулбар, синий акцент
 # на активных элементах. Те частини, що спільні для обох тем (шапка,
 # статус-бар, зелений акцент) -- НЕ дублюються нижче в PALETTE_DARK,
@@ -317,3 +319,73 @@ def set_window_icon(root: tk.Tk, path: str) -> bool:
         return True
     except (tk.TclError, FileNotFoundError):
         return False
+
+
+def make_text_readonly(widget: tk.Text) -> None:
+    """Text-віджет доступний для читання Й КОПІЮВАННЯ (виділення мишею,
+    Ctrl+C, Ctrl+A, копіювання через контекстне меню правої кнопки),
+    але недоступний для редагування.
+
+    СПІЛЬНА функція для ВСІХ read-only текстових полів у проєкті
+    (раніше -- окремі копії того самого коду в help_page.py,
+    analysis_page.py, ardupilot_link.py, sd_file_manager.py -- баг
+    "Ctrl+C не працює" виявлявся й виправлявся по одному разу на
+    кожен файл окремо, поки хтось знову на нього не натикався в
+    ЩЕ ОДНОМУ місці; тепер один спільний фікс покриває всі й будь-які
+    майбутні місця одразу).
+
+    Copy РЕАЛІЗОВАНО ЯВНО (widget.clipboard_clear()+append()), і
+    визначається за event.KEYCODE (апаратний код фізичної клавіші), А
+    НЕ event.keysym (символ, який ця клавіша ДРУКУЄ У ПОТОЧНІЙ
+    РОЗКЛАДЦІ). Причина: на кириличній розкладці клавіатури фізична
+    клавіша "C" дає зовсім ІНШИЙ keysym (щось на кшталт "Cyrillic_es",
+    не латинське "c") -- прив'язка САМЕ на рядок "<Control-c>" тому
+    просто НЕ спрацьовувала на такій розкладці (підтверджено
+    користувачем: на англійській розкладці Ctrl+C працював, на
+    кириличній -- ні). keycode -- фізичний скан-код клавіші, однаковий
+    незалежно від розкладки (67 -- "C", 65 -- "A", стандартні Windows
+    Virtual-Key Codes).
+
+    На відміну від звичайного widget.config(state="disabled") -- той у
+    tkinter блокує НЕ ЛИШЕ сам ввід тексту, а й виділення мишею та
+    стандартні комбінації типу Ctrl+C, оскільки disabled Text взагалі
+    не приймає фокус для таких операцій. Тримаємо state="normal", і
+    замість цього перехоплюємо натискання клавіш -- Control-комбінації
+    і навігаційні клавіші (стрілки, Home/End, PageUp/Down, Tab)
+    пропускаємо як є, решту (звичайний друкований ввід, Delete,
+    BackSpace тощо) блокуємо, повертаючи "break"."""
+    def _copy_selection():
+        try:
+            selected = widget.get("sel.first", "sel.last")
+        except tk.TclError:
+            return
+        widget.clipboard_clear()
+        widget.clipboard_append(selected)
+
+    def _select_all():
+        widget.tag_add("sel", "1.0", "end")
+
+    def _on_key(event):
+        if event.state & 0x4:
+            if event.keycode == 67:
+                _copy_selection()
+                return "break"
+            if event.keycode == 65:
+                _select_all()
+                return "break"
+            return None
+        if event.keysym in (
+            "Left", "Right", "Up", "Down", "Home", "End",
+            "Prior", "Next", "Tab", "Shift_L", "Shift_R",
+        ):
+            return None
+        return "break"
+
+    def _on_right_click(event):
+        menu = tk.Menu(widget, tearoff=0)
+        menu.add_command(label=i18n.t("ctx_copy"), command=_copy_selection)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    widget.config(state="normal")
+    widget.bind("<Key>", _on_key)
+    widget.bind("<Button-3>", _on_right_click)
