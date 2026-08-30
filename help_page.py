@@ -18,67 +18,6 @@ import theme
 import updater
 
 
-def _make_readonly(widget: tk.Text) -> None:
-    """Text-віджет доступний для читання Й КОПІЮВАННЯ (виділення мишею,
-    Ctrl+C, Ctrl+A, копіювання через контекстне меню правої кнопки),
-    але недоступний для редагування.
-
-    Copy РЕАЛІЗОВАНО ЯВНО (widget.clipboard_clear()+append()), і
-    визначається за event.KEYCODE (апаратний код фізичної клавіші), А
-    НЕ event.keysym (символ, який ця клавіша ДРУКУЄ У ПОТОЧНІЙ
-    РОЗКЛАДЦІ). Причина: на кириличній розкладці клавіатури фізична
-    клавіша "C" дає зовсім ІНШИЙ keysym (щось на кшталт "Cyrillic_es",
-    не латинське "c") -- прив'язка САМЕ на рядок "<Control-c>" тому
-    просто НЕ спрацьовувала на такій розкладці (підтверджено
-    користувачем: на англійській розкладці Ctrl+C працював, на
-    кириличній -- ні, доки не було цього фіксу). keycode -- фізичний
-    скан-код клавіші, однаковий незалежно від розкладки (67 -- "C",
-    65 -- "A", стандартні Windows Virtual-Key Codes).
-
-    На відміну від звичайного widget.config(state="disabled") -- той у
-    tkinter блокує НЕ ЛИШЕ сам ввід тексту, а й виділення мишею та
-    стандартні комбінації типу Ctrl+C, оскільки disabled Text взагалі
-    не приймає фокус для таких операцій. Тримаємо state="normal", і
-    замість цього перехоплюємо натискання клавіш -- Control-комбінації
-    і навігаційні клавіші (стрілки, Home/End, PageUp/Down, Tab)
-    пропускаємо як є, решту (звичайний друкований ввід, Delete,
-    BackSpace тощо) блокуємо, повертаючи "break"."""
-    def _copy_selection():
-        try:
-            selected = widget.get("sel.first", "sel.last")
-        except tk.TclError:
-            return
-        widget.clipboard_clear()
-        widget.clipboard_append(selected)
-
-    def _select_all():
-        widget.tag_add("sel", "1.0", "end")
-
-    def _on_key(event):
-        if event.state & 0x4:
-            if event.keycode == 67:
-                _copy_selection()
-                return "break"
-            if event.keycode == 65:
-                _select_all()
-                return "break"
-            return None
-        if event.keysym in (
-            "Left", "Right", "Up", "Down", "Home", "End",
-            "Prior", "Next", "Tab", "Shift_L", "Shift_R",
-        ):
-            return None
-        return "break"
-
-    def _on_right_click(event):
-        menu = tk.Menu(widget, tearoff=0)
-        menu.add_command(label=i18n.t("ctx_copy"), command=_copy_selection)
-        menu.tk_popup(event.x_root, event.y_root)
-
-    widget.config(state="normal")
-    widget.bind("<Key>", _on_key)
-    widget.bind("<Button-3>", _on_right_click)
-
 
 class HelpPageMixin:
     """Сторінка "Довідка": текст, changelog, оновлення."""
@@ -103,7 +42,7 @@ class HelpPageMixin:
         )
         self.help_text_widget.pack(fill="both", expand=True)
         self.help_text_widget.insert("end", i18n.t("help_text_body"))
-        _make_readonly(self.help_text_widget)
+        theme.make_text_readonly(self.help_text_widget)
 
         changelog_tab = ttk.Frame(help_notebook)
         help_notebook.add(changelog_tab, text=i18n.t("tab_changelog"))
@@ -126,7 +65,7 @@ class HelpPageMixin:
         self.changelog_text_widget.pack(fill="both", expand=True)
         self.changelog_text_widget.insert("end", f"{i18n.t('app_title')} — {i18n.t('label_version')} {meta.VERSION}")
         self.changelog_text_widget.insert("end", meta.format_changelog(i18n.get_lang()))
-        _make_readonly(self.changelog_text_widget)
+        theme.make_text_readonly(self.changelog_text_widget)
 
         # ScrolledText -- складений віджет (Text + власний Scrollbar
         # усередині, .vbar). Той власний Scrollbar -- plain
@@ -150,7 +89,7 @@ class HelpPageMixin:
             self.help_text_widget.config(state="normal")
             self.help_text_widget.delete("1.0", "end")
             self.help_text_widget.insert("end", i18n.t("help_text_body"))
-            _make_readonly(self.help_text_widget)
+            theme.make_text_readonly(self.help_text_widget)
 
             self.changelog_text_widget.config(state="normal")
             self.changelog_text_widget.delete("1.0", "end")
@@ -158,7 +97,7 @@ class HelpPageMixin:
                 "end", f"{i18n.t('app_title')} — {i18n.t('label_version')} {meta.VERSION}",
             )
             self.changelog_text_widget.insert("end", meta.format_changelog(i18n.get_lang()))
-            _make_readonly(self.changelog_text_widget)
+            theme.make_text_readonly(self.changelog_text_widget)
 
         self._retranslate_callbacks.append(_retranslate_help_page)
 
