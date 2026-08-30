@@ -26,6 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 import i18n
+import theme
 
 
 class ArduPilotLinkMixin:
@@ -259,6 +260,7 @@ class ArduPilotLinkMixin:
             self._ardu_read_btn.pack(side="left", padx=6)
             self._ardu_write_btn.pack(side="left")
             self._ardu_files_btn.pack(side="left", padx=6)
+            self._ardu_commands_btn.pack(side="left")
             self._ardu_btns_visible = True
 
 
@@ -277,6 +279,7 @@ class ArduPilotLinkMixin:
             self._ardu_read_btn.pack_forget()
             self._ardu_write_btn.pack_forget()
             self._ardu_files_btn.pack_forget()
+            self._ardu_commands_btn.pack_forget()
             self._ardu_btns_visible = False
 
 
@@ -297,10 +300,19 @@ class ArduPilotLinkMixin:
         conn = self._flight_conn
         report = None
         error = None
+
+        def set_progress(text):
+            # thread-safe оновлення статус-рядка з фонового потоку --
+            # Tkinter-змінні не можна чіпати напряму з не-головного
+            # потоку, тому через self.after(0, ...), як і скрізь у
+            # проєкті для подібних оновлень з worker-потоків.
+            self.after(0, lambda: self.status_var.set(text))
+
         try:
             ts, tc = conn.target_system, conn.target_component
 
             # --- AUTOPILOT_VERSION: версія прошивки, плата, vendor/product, UID ---
+            set_progress(i18n.t("status_info_step_version"))
             conn.mav.command_long_send(
                 ts, tc, mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
                 mavutil.mavlink.MAVLINK_MSG_ID_AUTOPILOT_VERSION, 0, 0, 0, 0, 0, 0,
@@ -309,6 +321,7 @@ class ArduPilotLinkMixin:
 
             # --- SYS_STATUS: набір датчиків (часто й так вже йде в потоці
             # телеметрії -- спочатку пробуємо просто прийняти, без запиту) ---
+            set_progress(i18n.t("status_info_step_sensors"))
             sys_status = conn.recv_match(type="SYS_STATUS", blocking=True, timeout=3)
             if sys_status is None:
                 conn.mav.command_long_send(
@@ -318,6 +331,7 @@ class ArduPilotLinkMixin:
                 sys_status = conn.recv_match(type="SYS_STATUS", blocking=True, timeout=3)
 
             # --- STORAGE_INFORMATION: наявність і обсяг SD-карти ---
+            set_progress(i18n.t("status_info_step_storage"))
             conn.mav.command_long_send(
                 ts, tc, mavutil.mavlink.MAV_CMD_REQUEST_STORAGE_INFORMATION, 0,
                 0, 1, 0, 0, 0, 0, 0,
@@ -327,11 +341,14 @@ class ArduPilotLinkMixin:
             # --- список файлів на SD (MAVLink FTP, вбудований в pymavlink) ---
             files = None
             ftp_error = None
+            scripted_commands = []
+            scanned_lua_files = []
             has_ftp_cap = ver is not None and bool(
                 ver.capabilities & mavutil.mavlink.MAV_PROTOCOL_CAPABILITY_FTP
             )
             if has_ftp_cap:
                 try:
+                    set_progress(i18n.t("status_info_step_files"))
                     from pymavlink.mavftp import MAVFTP
                     ftp = MAVFTP(conn, ts, tc)
                     ret = ftp.cmd_list(["/"])
@@ -339,12 +356,53 @@ class ArduPilotLinkMixin:
                         files = ftp.list_result
                     else:
                         ftp_error = self._describe_ftp_error(ret.operation_name, ret.error_code)
+
+                    # --- сканування APM/scripts/ на MCP-розмітку --
+                    # ОКРЕМИЙ виклик cmd_list, ПІСЛЯ того, як files уже
+                    # захопив посилання на СТАРИЙ ftp.list_result (сам
+                    # ftp.list_result ПЕРЕЗАПИСУЄТЬСЯ новим списком на
+                    # кожен cmd_list, тому порядок тут важливий -- інакше
+                    # files (корінь SD) перетворився б на список APM/
+                    # scripts/ заднім числом). Відсутність цієї папки
+                    # (SCR_ENABLE=0 чи просто немає жодного скрипта) --
+                    # НЕ помилка, просто scripted_commands лишається
+                    # порожнім.
+                    set_progress(i18n.t("status_info_step_scripts"))
+                    ret_scripts = ftp.cmd_list(["/APM/scripts"])
+                    if ret_scripts.error_code == 0:
+                        lua_texts = {}
+                        script_entries = [e for e in ftp.list_result if not e.is_dir and e.name.lower().endswith(".lua")]
+                        for i, entry in enumerate(script_entries, 1):
+                            set_progress(i18n.t(
+                                "status_info_step_script_file_fmt",
+                                name=entry.name, done=i, total=len(script_entries),
+                            ))
+                            remote_path = f"/APM/scripts/{entry.name}"
+                            captured = {}
+
+                            def _capture(fh, _captured=captured):
+                                _captured["data"] = fh.read()
+
+                            ftp.cmd_get([remote_path], callback=_capture)
+                            ret_get = ftp.process_ftp_reply("get", timeout=30)
+                            if ret_get.error_code == 0 and "data" in captured:
+                                try:
+                                    lua_texts[entry.name] = captured["data"].decode("utf-8", errors="replace")
+                                    scanned_lua_files.append(entry.name)
+                                except Exception:
+                                    pass
+                        if lua_texts:
+                            from mcp_script_scanner import parse_mcp_commands_from_files
+                            scripted_commands = parse_mcp_commands_from_files(lua_texts)
                 except Exception as e:
                     ftp_error = str(e)
             elif ver is not None:
                 ftp_error = i18n.t("info_ftp_not_supported")
 
-            report = self._format_flight_info(conn, ver, sys_status, storage, files, ftp_error)
+            self._scripted_commands = scripted_commands
+            report = self._format_flight_info(
+                conn, ver, sys_status, storage, files, ftp_error, scripted_commands, scanned_lua_files,
+            )
         except Exception as e:
             error = str(e)
         self.after(0, lambda: self._on_flight_info_ready(report, error))
@@ -386,19 +444,44 @@ class ArduPilotLinkMixin:
         return out
 
 
-    def _format_flight_info(self, conn, ver, sys_status, storage, files, ftp_error) -> str:
+    def _format_flight_info(
+        self, conn, ver, sys_status, storage, files, ftp_error,
+        scripted_commands=None, scanned_lua_files=None,
+    ) -> str:
         from pymavlink import mavutil
         lines = []
 
         # --- шапка: тип апарату/автопілота з HEARTBEAT ---
-        hb = getattr(conn, "messages", {}).get("HEARTBEAT")
-        if hb is not None:
-            autopilot_name = mavutil.mavlink.enums["MAV_AUTOPILOT"].get(hb.autopilot)
-            type_name = mavutil.mavlink.enums["MAV_TYPE"].get(hb.type)
+        # ВАЖЛИВО: не conn.messages["HEARTBEAT"] напряму -- pymavlink
+        # зберігає ОСТАННЄ повідомлення кожного типу ПО SYSTEM ID, БЕЗ
+        # урахування COMPONENT ID! Якщо на тій самій шині MAVLink є ще
+        # й інші компоненти (ADS-B приймач, гімбал, компаньйон-
+        # комп'ютер тощо) з ТИМ САМИМ system id, що й сам автопілот --
+        # їхній HEARTBEAT перезаписує запис, і "тип апарату" міг би
+        # показати "ADS-B передавач" замість реального типу -- саме це
+        # й трапилось на практиці. pymavlink вже має власний, коректний
+        # фільтр для цього (probably_vehicle_heartbeat -- виключає
+        # ADS-B/GIMBAL/GCS/ONBOARD_CONTROLLER і MAV_AUTOPILOT_INVALID),
+        # результат зберігається в conn.sysid_state[sysid].mav_type/
+        # mav_autopilot -- звідси й берем, а не з сирого messages dict.
+        sysid = getattr(conn, "target_system", None)
+        state = conn.sysid_state.get(sysid) if sysid is not None else None
+        if state is not None:
+            autopilot_name = mavutil.mavlink.enums["MAV_AUTOPILOT"].get(state.mav_autopilot)
+            # Тип апарату -- ПЕРЕКЛАД на мову інтерфейсу (mav_type_<ID>,
+            # i18n.py), а НЕ сира англійська назва enum. Ключ за
+            # ЧИСЛОВИМ ID (mav_type), не за іменем -- надійніше. Якщо
+            # раптом трапиться ID поза відомим діапазоном (майбутнє
+            # розширення MAVLink) -- запасний варіант, сира назва enum.
+            key = f"mav_type_{state.mav_type}"
+            vtype_translated = i18n.t(key)
+            if vtype_translated == key:  # немає перекладу -- i18n.t() повертає сам ключ
+                type_name = mavutil.mavlink.enums["MAV_TYPE"].get(state.mav_type)
+                vtype_translated = type_name.name.replace("MAV_TYPE_", "") if type_name else "?"
             lines.append(i18n.t(
                 "info_header_fmt",
                 autopilot=autopilot_name.name.replace("MAV_AUTOPILOT_", "") if autopilot_name else "?",
-                vtype=type_name.name.replace("MAV_TYPE_", "") if type_name else "?",
+                vtype=vtype_translated,
             ))
             lines.append("")
 
@@ -492,6 +575,44 @@ class ArduPilotLinkMixin:
         else:
             lines.append(i18n.t("info_no_response"))
 
+        # --- скриптові команди (MCP-COMMAND у .lua на APM/scripts/) ---
+        # ГРУПУЄМО ПО ФАЙЛУ (не єдиний плоский список команд) -- для
+        # КОЖНОГО реально відсканованого .lua явно показуємо або "без
+        # розмітки" (файл існує й прочитаний, але MCP-COMMAND у ньому
+        # немає -- саме так пользувач і зловив цю ситуацію: скрипт
+        # старої версії, без розмітки, на карті), або список знайдених
+        # команд з готовою інструкцією "як вбудувати" (NAV_SCRIPT_TIME,
+        # який param1 і що покласти в які параметри) -- а не просто
+        # назву й параметри без пояснення, що з ними робити.
+        lines.append("")
+        lines.append(i18n.t("info_section_scripts"))
+        lines.append("-" * 44)
+        scanned_lua_files = scanned_lua_files or []
+        scripted_commands = scripted_commands or []
+        if scanned_lua_files:
+            by_file: dict[str, list[dict]] = {}
+            for cmd in scripted_commands:
+                by_file.setdefault(cmd["source_file"], []).append(cmd)
+
+            for filename in scanned_lua_files:
+                lines.append(i18n.t("info_script_file_fmt", name=filename))
+                cmds = by_file.get(filename, [])
+                if not cmds:
+                    lines.append("  " + i18n.t("info_script_no_markup"))
+                    continue
+                for cmd in cmds:
+                    lines.append("  " + i18n.t(
+                        "info_script_cmd_embed_fmt", cmd=cmd["cmd"], name=cmd["name"],
+                    ))
+                    for p in cmd["params"]:
+                        lines.append("    " + i18n.t(
+                            "info_script_param_fmt",
+                            slot=p["slot"], label=p["label"], unit=p["unit"],
+                        ))
+                lines.append("")
+        else:
+            lines.append(i18n.t("info_no_scripted_commands"))
+
         return "\n".join(lines)
 
 
@@ -513,9 +634,8 @@ class ArduPilotLinkMixin:
         text = scrolledtext.ScrolledText(dlg, wrap="word", font=("Consolas", 9))
         text.pack(fill="both", expand=True, padx=8, pady=8)
         text.insert("end", report_text)
-        text.config(state="disabled")
+        theme.make_text_readonly(text)
 
-        ttk.Button(dlg, text=i18n.t("btn_close"), command=dlg.destroy).pack(pady=(0, 8))
         dlg.grab_set()
 
 
@@ -680,5 +800,211 @@ class ArduPilotLinkMixin:
         self.connect_btn.configure(state="normal")
         self.status_var.set("")
         messagebox.showerror("MAVLink", i18n.t("msg_action_failed_body", action=action, error=error))
+
+
+    # ============================================================
+    # "Команди" -- перевірка команд MAV_CMD САМЕ ЯК ЕЛЕМЕНТІВ МІСІЇ
+    # (mission item) на РЕАЛЬНО підключеній платі. Портовано з
+    # окремого standalone-скрипта mcp_probe_mission_items.py (проєкт
+    # "MCP", той самий алгоритм, вже перевірений mock-бортом через
+    # UDP loopback) -- тут адаптовано під self._flight_conn (вже
+    # відкрите з'єднання застосунку) замість власного підключення.
+    # ============================================================
+
+    _MISSION_RESULT_NAMES = {
+        0: "ACCEPTED", 1: "ERROR", 2: "UNSUPPORTED_FRAME", 3: "UNSUPPORTED",
+        4: "NO_SPACE", 5: "INVALID", 6: "INVALID_PARAM1", 7: "INVALID_PARAM2",
+        8: "INVALID_PARAM3", 9: "INVALID_PARAM4", 10: "INVALID_PARAM5_X",
+        11: "INVALID_PARAM6_Y", 12: "INVALID_PARAM7", 13: "INVALID_SEQUENCE",
+        14: "DENIED", 15: "OPERATION_CANCELLED",
+    }
+    # DO_JUMP_TAG посилається на ТЕГ (окрема команда MAV_CMD_JUMP_TAG
+    # десь у місії з тим самим числом), не на seq -- у простій
+    # 3-пунктній тестовій місії такого тегу немає, тому чесно
+    # пропускаємо, а не видаємо хибний UNSUPPORTED (та сама причина,
+    # що й у mcp_probe_mission_items.py).
+    _MISSION_TEST_SKIP = {"MAV_CMD_DO_JUMP_TAG"}
+
+    def _show_scripted_commands_scan(self):
+        if self._flight_conn is None:
+            return
+        proceed = messagebox.askyesno(
+            i18n.t("dlg_scripted_commands_title"),
+            i18n.t("msg_scripted_commands_confirm_body"),
+        )
+        if not proceed:
+            return
+        self._ardu_commands_btn.configure(state="disabled")
+        self.status_var.set(i18n.t("status_scanning_commands"))
+        threading.Thread(target=self._scripted_commands_scan_worker, daemon=True).start()
+
+
+    def _download_current_mission_items(self, conn, timeout: float = 10.0) -> list | None:
+        from pymavlink import mavutil
+        conn.mav.mission_request_list_send(conn.target_system, conn.target_component)
+        msg = conn.recv_match(type="MISSION_COUNT", blocking=True, timeout=timeout)
+        if msg is None:
+            return None
+        count = msg.count
+        if count == 0:
+            return []
+        items = []
+        for seq in range(count):
+            conn.mav.mission_request_int_send(conn.target_system, conn.target_component, seq)
+            item = conn.recv_match(type="MISSION_ITEM_INT", blocking=True, timeout=timeout)
+            if item is None or item.seq != seq:
+                return None
+            items.append(item)
+        conn.recv_match(type="MISSION_ACK", blocking=True, timeout=1.0)
+        return items
+
+
+    def _restore_mission_items(self, conn, items: list, timeout: float = 10.0) -> bool:
+        if not items:
+            conn.mav.mission_clear_all_send(conn.target_system, conn.target_component)
+            return True
+        conn.mav.mission_count_send(conn.target_system, conn.target_component, len(items), 0)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            msg = conn.recv_match(
+                type=["MISSION_REQUEST_INT", "MISSION_REQUEST", "MISSION_ACK"],
+                blocking=True, timeout=0.3,
+            )
+            if msg is None:
+                continue
+            if msg.get_type() == "MISSION_ACK":
+                return msg.type == 0
+            seq = msg.seq
+            if seq >= len(items):
+                continue
+            orig = items[seq]
+            conn.mav.mission_item_int_send(
+                conn.target_system, conn.target_component, seq,
+                orig.frame, orig.command, orig.current, orig.autocontinue,
+                orig.param1, orig.param2, orig.param3, orig.param4,
+                orig.x, orig.y, orig.z,
+            )
+        return False
+
+
+    def _upload_test_mission_item(self, conn, cmd_id: int, timeout: float = 5.0) -> str:
+        from pymavlink import mavutil
+        conn.mav.mission_count_send(conn.target_system, conn.target_component, 3, 0)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            msg = conn.recv_match(
+                type=["MISSION_REQUEST_INT", "MISSION_REQUEST", "MISSION_ACK"],
+                blocking=True, timeout=0.3,
+            )
+            if msg is None:
+                continue
+            if msg.get_type() == "MISSION_ACK":
+                return self._MISSION_RESULT_NAMES.get(msg.type, f"UNKNOWN({msg.type})")
+            seq = msg.seq
+            if seq == 0:
+                conn.mav.mission_item_int_send(
+                    conn.target_system, conn.target_component, 0,
+                    mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+                    mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 1, 1,
+                    0, 0, 0, 0, 0, 0, 0,
+                )
+            elif seq == 1:
+                conn.mav.mission_item_int_send(
+                    conn.target_system, conn.target_component, 1,
+                    mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+                    mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 1,
+                    0, 0, 0, 0, 0, 0, 10,
+                )
+            elif seq == 2:
+                if cmd_id == mavutil.mavlink.MAV_CMD_DO_JUMP:
+                    param1, param2 = 1, 1
+                else:
+                    param1 = param2 = 0
+                conn.mav.mission_item_int_send(
+                    conn.target_system, conn.target_component, 2,
+                    mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+                    cmd_id, 0, 1,
+                    param1, param2, 0, 0, 0, 0, 10,
+                )
+            else:
+                continue
+        return "TIMEOUT"
+
+
+    def _scripted_commands_scan_worker(self):
+        conn = self._flight_conn
+        report = None
+        error = None
+
+        def set_progress(text):
+            self.after(0, lambda: self.status_var.set(text))
+
+        try:
+            from mcp_list_commands import get_all_commands
+            all_commands = get_all_commands()
+            to_test = [(cid, name) for cid, name, _desc in all_commands if name not in self._MISSION_TEST_SKIP]
+
+            set_progress(i18n.t("status_scanning_backup_mission"))
+            original_mission = self._download_current_mission_items(conn)
+            if original_mission is None:
+                error = i18n.t("msg_scripted_commands_backup_failed")
+            else:
+                results = []
+                try:
+                    for i, (cmd_id, name) in enumerate(to_test, 1):
+                        set_progress(i18n.t(
+                            "status_scanning_command_fmt", name=name, done=i, total=len(to_test),
+                        ))
+                        result = self._upload_test_mission_item(conn, cmd_id)
+                        results.append((cmd_id, name, result))
+                finally:
+                    set_progress(i18n.t("status_scanning_restore_mission"))
+                    self._restore_mission_items(conn, original_mission)
+
+                report = self._format_scripted_commands_report(results)
+        except Exception as e:
+            error = str(e)
+
+        self.after(0, lambda: self._on_scripted_commands_scan_ready(report, error))
+
+
+    def _format_scripted_commands_report(self, results: list) -> str:
+        lines = [i18n.t("info_section_mission_commands"), "-" * 44, ""]
+        by_result: dict[str, int] = {}
+        for _cid, _name, result in results:
+            by_result[result] = by_result.get(result, 0) + 1
+        for result, count in sorted(by_result.items(), key=lambda x: -x[1]):
+            lines.append(f"  {result:<25} {count}")
+
+        accepted = [r for r in results if r[2] == "ACCEPTED"]
+        lines.append("")
+        lines.append(i18n.t("info_mission_commands_accepted_fmt", count=len(accepted)))
+        lines.append("-" * 44)
+        for cmd_id, name, _ in accepted:
+            lines.append(f"  {cmd_id:6}  {name}")
+        return "\n".join(lines)
+
+
+    def _on_scripted_commands_scan_ready(self, report: str | None, error: str | None):
+        self._ardu_commands_btn.configure(state="normal")
+        self.status_var.set("")
+        if error or report is None:
+            messagebox.showerror(i18n.t("msg_update_title"), i18n.t("info_fetch_error_fmt", error=error or "?"))
+            return
+        self._show_scripted_commands_dialog(report)
+
+
+    def _show_scripted_commands_dialog(self, report_text: str):
+        dlg = tk.Toplevel(self)
+        dlg.title(i18n.t("dlg_scripted_commands_title"))
+        dlg.geometry("560x560")
+        dlg.transient(self)
+
+        text = scrolledtext.ScrolledText(dlg, wrap="word", font=("Consolas", 9))
+        text.pack(fill="both", expand=True, padx=8, pady=8)
+        text.insert("end", report_text)
+        theme.make_text_readonly(text)
+
+        dlg.grab_set()
 
 
