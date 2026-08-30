@@ -1216,7 +1216,7 @@ class AnalysisPageMixin:
         # єдиний спільний повзунок вкладки
         n_lines = max(text.count("\n") + 1, 1)
         widget.configure(height=min(max(n_lines, 3), 40))
-        widget.configure(state="disabled")
+        theme.make_text_readonly(widget)
 
 
     def _distribute_report_text(self, report_text: str):
