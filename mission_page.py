@@ -233,7 +233,7 @@ class MissionPageMixin:
         ardu_btns_frame = tk.Frame(btns, bg=c["bg"])
         ardu_btns_frame.pack(side="right")
         self._mission_bg_widgets.append(ardu_btns_frame)
-        self._ardu_info_btn, self._ardu_read_btn, self._ardu_write_btn, self._ardu_files_btn, self._ardu_commands_btn = \
+        self._ardu_info_btn, self._ardu_read_btn, self._ardu_write_btn, self._ardu_files_btn, self._ardu_commands_btn, self._ardu_params_btn = \
             self._make_toggle_action_buttons(
                 ardu_btns_frame, [
                     (i18n.t("btn_info"), self._show_flight_info),
@@ -241,6 +241,7 @@ class MissionPageMixin:
                     (i18n.t("btn_write"), self._save_mission_to_mavlink),
                     (i18n.t("btn_sd_files"), self._show_sd_files),
                     (i18n.t("btn_scripted_commands"), self._show_scripted_commands_scan),
+                    (i18n.t("btn_params"), self._show_key_params),
                 ]
             )
         self._reg_i18n(self._ardu_info_btn, "text", "btn_info")
@@ -248,6 +249,7 @@ class MissionPageMixin:
         self._reg_i18n(self._ardu_write_btn, "text", "btn_write")
         self._reg_i18n(self._ardu_files_btn, "text", "btn_sd_files")
         self._reg_i18n(self._ardu_commands_btn, "text", "btn_scripted_commands")
+        self._reg_i18n(self._ardu_params_btn, "text", "btn_params")
         # спочатку сховані -- покажемо при підключенні
         self._ardu_btns_visible = False
 
@@ -277,18 +279,21 @@ class MissionPageMixin:
                 logo_label.place(relx=0.5, rely=0.5, anchor="center")
                 self._mission_bg_widgets.append(logo_label)
 
-                # "by <автор>" -- та сама постійна підпис, що й на спалх-
-                # екрані (main.py) -- там вона майже непомітна, показується
-                # лише 1.3с на самому старті програми. Тут -- на початковій
-                # заглушці "Місія" до завантаження файлу місії, видима
-                # стільки, скільки користувач її бачить, не мигцем. Лише
-                # якщо логотип реально показаний -- "під лого" без самого
-                # лого не мало б сенсу.
+                from meta import VERSION
+                version_label = tk.Label(
+                    self.mission_placeholder,
+                    text=f"Version: {VERSION}", fg="#4CAF50", bg=c["bg"],
+                    font=("Segoe UI", 10, "bold"),
+                )
+                version_label.place(relx=0.5, rely=0.5, anchor="n", y=90)
+                self._mission_bg_widgets.append(version_label)
+
                 author_label = tk.Label(
-                    self.mission_placeholder, text=f"by {AUTHOR}", fg="#888888", bg=c["bg"],
+                    self.mission_placeholder,
+                    text=f"by {AUTHOR}", fg="#888888", bg=c["bg"],
                     font=("Segoe UI", 9),
                 )
-                author_label.place(relx=0.5, rely=0.5, anchor="n", y=95)
+                author_label.place(relx=0.5, rely=0.5, anchor="n", y=114)
                 self._mission_bg_widgets.append(author_label)
 
         self.mission_content = tk.Frame(mission_body, bg=c["bg"])
