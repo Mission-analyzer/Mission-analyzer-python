@@ -605,9 +605,17 @@ _TR: dict[str, dict[str, str]] = {
     },
     "info_uid_fmt": {"uk": "UID: {uid}", "en": "UID: {uid}"},
     "info_git_hash_fmt": {"uk": "Git-хеш прошивки: {hash}", "en": "Firmware git hash: {hash}"},
+    "info_middleware_version_fmt": {"uk": "Версія middleware: {version}", "en": "Middleware version: {version}"},
+    "info_middleware_hash_fmt": {"uk": "Git-хеш middleware: {hash}", "en": "Middleware git hash: {hash}"},
+    "info_os_hash_fmt": {"uk": "Git-хеш OS: {hash}", "en": "OS git hash: {hash}"},
     "info_section_sensors": {"uk": "Датчики", "en": "Sensors"},
     "info_no_sensors": {"uk": "Дані про датчики відсутні", "en": "No sensor data available"},
     "info_sensor_unhealthy": {"uk": "НЕСПРАВНИЙ", "en": "UNHEALTHY"},
+    "info_sensor_absent_hint": {"uk": "(відсутній?)", "en": "(absent?)"},
+    "info_baro_fmt": {
+        "uk": "Барометр: {press:.1f} гПа, температура {temp:.1f}°C",
+        "en": "Barometer: {press:.1f} hPa, temperature {temp:.1f}°C",
+    },
     "info_battery_fmt": {
         "uk": "Батарея: {voltage} В, {current} А, лишилось {remaining}%",
         "en": "Battery: {voltage} V, {current} A, {remaining}% remaining",
@@ -637,6 +645,22 @@ _TR: dict[str, dict[str, str]] = {
     "info_script_no_markup": {
         "uk": "без розмітки MCP-COMMAND (файл прочитано, команд не знайдено)",
         "en": "no MCP-COMMAND markup (file read, no commands found)",
+    },
+    "info_script_type_background": {
+        "uk": "тип: фоновий (не вставляється в місію)",
+        "en": "type: background (not a mission item)",
+    },
+    "info_script_type_mission": {
+        "uk": "тип: місіонний (вставляється як NAV_SCRIPT_TIME)",
+        "en": "type: mission item (embed as NAV_SCRIPT_TIME)",
+    },
+    "info_script_heuristic_header": {
+        "uk": "Евристично знайдені команди (без опису, без параметрів):",
+        "en": "Heuristically detected commands (no description, no parameters):",
+    },
+    "info_script_heuristic_cmd_fmt": {
+        "uk": "Команда {cmd} ({name}) — немає опису",
+        "en": "Command {cmd} ({name}) — no description",
     },
     "info_script_cmd_embed_fmt": {
         "uk": "Команда {cmd} \"{name}\" -- вбудувати як NAV_SCRIPT_TIME (42702), param1={cmd}:",
@@ -672,6 +696,18 @@ _TR: dict[str, dict[str, str]] = {
     # --- файловий менеджер SD-карти ---
     "btn_sd_files": {"uk": "Файли SD", "en": "SD Files"},
     "btn_scripted_commands": {"uk": "Команди", "en": "Commands"},
+    "btn_params": {"uk": "Параметри", "en": "Parameters"},
+    "vehicle_type_plane":   {"uk": "Літак", "en": "Fixed-wing"},
+    "vehicle_type_copter":  {"uk": "Коптер", "en": "Copter"},
+    "vehicle_type_rover":   {"uk": "Ровер", "en": "Rover"},
+    "vehicle_type_unknown": {"uk": "Невідомий тип", "en": "Unknown type"},
+    "dlg_params_title": {"uk": "Критичні параметри місії", "en": "Mission-critical parameters"},
+    "status_reading_params": {"uk": "Читання параметрів...", "en": "Reading parameters..."},
+    "status_reading_param_fmt": {
+        "uk": "Параметр {name} ({done}/{total})...",
+        "en": "Parameter {name} ({done}/{total})...",
+    },
+    "param_no_response": {"uk": "—", "en": "—"},
     "dlg_scripted_commands_title": {"uk": "Команди місії", "en": "Mission commands"},
     "msg_scripted_commands_confirm_body": {
         "uk": (
