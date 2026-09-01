@@ -493,7 +493,14 @@ class SDFileManagerMixin:
 
         tree.bind("<Button-3>", on_right_click)
 
-        dlg.grab_set()
+        def _on_dlg_close():
+            dlg.destroy()
+            if hasattr(self, "_ardu_files_btn"):
+                self._ardu_files_btn._is_toggle_active = False
+                self._refresh_toggle_action_button_colors(self._toggle_buttons_registry)
+                self._ardu_files_btn.configure(state="normal")
+
+        dlg.protocol("WM_DELETE_WINDOW", _on_dlg_close)
         refresh()
 
 
@@ -542,7 +549,6 @@ class SDFileManagerMixin:
         widget.insert("end", text_content)
         theme.make_text_readonly(widget)
 
-        dlg.grab_set()
 
 
     @staticmethod
@@ -670,6 +676,5 @@ class SDFileManagerMixin:
                 lambda _e, c=canvas, s=series, col=color: self._draw_log_series(c, s, col),
             )
 
-        dlg.grab_set()
 
 
