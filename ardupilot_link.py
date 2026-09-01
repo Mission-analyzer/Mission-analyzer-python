@@ -19,6 +19,7 @@ self.render_map) при завантаженні місії з борту.
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -261,6 +262,7 @@ class ArduPilotLinkMixin:
             self._ardu_write_btn.pack(side="left")
             self._ardu_files_btn.pack(side="left", padx=6)
             self._ardu_commands_btn.pack(side="left")
+            self._ardu_params_btn.pack(side="left", padx=6)
             self._ardu_btns_visible = True
 
 
@@ -280,6 +282,7 @@ class ArduPilotLinkMixin:
             self._ardu_write_btn.pack_forget()
             self._ardu_files_btn.pack_forget()
             self._ardu_commands_btn.pack_forget()
+            self._ardu_params_btn.pack_forget()
             self._ardu_btns_visible = False
 
 
@@ -329,6 +332,13 @@ class ArduPilotLinkMixin:
                     mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS, 0, 0, 0, 0, 0, 0,
                 )
                 sys_status = conn.recv_match(type="SYS_STATUS", blocking=True, timeout=3)
+
+            # --- SCALED_PRESSURE: абсолютний тиск і температура барометра ---
+            conn.mav.command_long_send(
+                ts, tc, mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
+                mavutil.mavlink.MAVLINK_MSG_ID_SCALED_PRESSURE, 0, 0, 0, 0, 0, 0,
+            )
+            scaled_pressure = conn.recv_match(type="SCALED_PRESSURE", blocking=True, timeout=3)
 
             # --- STORAGE_INFORMATION: наявність і обсяг SD-карти ---
             set_progress(i18n.t("status_info_step_storage"))
@@ -392,16 +402,24 @@ class ArduPilotLinkMixin:
                                 except Exception:
                                     pass
                         if lua_texts:
-                            from mcp_script_scanner import parse_mcp_commands_from_files
+                            from mcp_script_scanner import parse_mcp_commands_from_files, parse_scripts_meta_from_files
                             scripted_commands = parse_mcp_commands_from_files(lua_texts)
+                            self._scripts_meta = parse_scripts_meta_from_files(lua_texts)
                 except Exception as e:
                     ftp_error = str(e)
             elif ver is not None:
                 ftp_error = i18n.t("info_ftp_not_supported")
 
             self._scripted_commands = scripted_commands
+            self._scripts_meta = getattr(self, "_scripts_meta", {})
+            # зберігаємо температуру барометра для HUD (оновлюється рідко,
+            # тому просто при кожному натисканні Info, а не в реальному часі)
+            self._hud_baro_temp = (
+                scaled_pressure.temperature / 100.0 if scaled_pressure is not None else None
+            )
             report = self._format_flight_info(
-                conn, ver, sys_status, storage, files, ftp_error, scripted_commands, scanned_lua_files,
+                conn, ver, sys_status, scaled_pressure, storage, files, ftp_error,
+                scripted_commands, scanned_lua_files, self._scripts_meta,
             )
         except Exception as e:
             error = str(e)
@@ -445,8 +463,8 @@ class ArduPilotLinkMixin:
 
 
     def _format_flight_info(
-        self, conn, ver, sys_status, storage, files, ftp_error,
-        scripted_commands=None, scanned_lua_files=None,
+        self, conn, ver, sys_status, scaled_pressure=None, storage=None, files=None, ftp_error=None,
+        scripted_commands=None, scanned_lua_files=None, scripts_meta=None,
     ) -> str:
         from pymavlink import mavutil
         lines = []
@@ -501,7 +519,42 @@ class ArduPilotLinkMixin:
                 lines.append(i18n.t("info_uid_fmt", uid=f"{uid:016x}"))
             fc_hash = bytes(ver.flight_custom_version).rstrip(b"\x00")
             if fc_hash:
-                lines.append(i18n.t("info_git_hash_fmt", hash=fc_hash.hex()))
+                # flight_custom_version -- 8 байт, де ArduPilot зберігає
+                # git-хеш САМЕ ЯК ASCII-символи (не як бінарне число).
+                # .hex() давало б "3364623462633765" (hex-дамп байтів) --
+                # незрозуміло людині. .decode("ascii") дає "3db4bc7e" --
+                # справжній git short hash, по якому можна знайти коміт.
+                try:
+                    hash_str = fc_hash.decode("ascii").strip()
+                except UnicodeDecodeError:
+                    hash_str = fc_hash.hex()  # запасний варіант, якщо раптом не ASCII
+                lines.append(i18n.t("info_git_hash_fmt", hash=hash_str))
+
+            # --- Middleware і OS -- виробник БПЛА міг записати сюди
+            # власний номер версії (та сама 8-байтна ASCII-структура що й
+            # flight_custom_version). Стокова ArduPilot записує git-хеш
+            # ChibiOS або нулі -- усе інше майже напевно кастомна мітка.
+            def _try_decode_custom(raw_bytes):
+                data = bytes(raw_bytes).rstrip(b"\x00")
+                if not data:
+                    return None
+                try:
+                    return data.decode("ascii").strip()
+                except UnicodeDecodeError:
+                    return data.hex()
+
+            mw_ver = ver.middleware_sw_version
+            if mw_ver:
+                lines.append(i18n.t("info_middleware_version_fmt", version=mw_ver))
+
+            mw_hash = _try_decode_custom(ver.middleware_custom_version)
+            if mw_hash:
+                lines.append(i18n.t("info_middleware_hash_fmt", hash=mw_hash))
+
+            os_hash = _try_decode_custom(ver.os_custom_version)
+            if os_hash:
+                lines.append(i18n.t("info_os_hash_fmt", hash=os_hash))
+
         lines.append("")
 
         # --- SYS_STATUS: датчики ---
@@ -510,17 +563,60 @@ class ArduPilotLinkMixin:
         if sys_status is None:
             lines.append(i18n.t("info_no_response"))
         else:
+            # зовнішні датчики: якщо несправні -- майже завжди просто
+            # не підключені (а не реально зламані), тому додаємо підказку
+            # "(відсутній?)" -- зі знаком питання, бо ми не можемо знати
+            # напевно (можливо підключений, але реально не працює).
+            from pymavlink import mavutil as _mu
+            _EXTERNAL_SENSOR_BITS = frozenset([
+                _mu.mavlink.MAV_SYS_STATUS_SENSOR_DIFFERENTIAL_PRESSURE,
+                _mu.mavlink.MAV_SYS_STATUS_SENSOR_GPS,
+                _mu.mavlink.MAV_SYS_STATUS_SENSOR_OPTICAL_FLOW,
+                _mu.mavlink.MAV_SYS_STATUS_SENSOR_RC_RECEIVER,
+                _mu.mavlink.MAV_SYS_STATUS_SENSOR_LASER_POSITION,
+                _mu.mavlink.MAV_SYS_STATUS_SENSOR_EXTERNAL_GROUND_TRUTH,
+                _mu.mavlink.MAV_SYS_STATUS_AHRS,
+            ])
+            present_mask = sys_status.onboard_control_sensors_present
             sensors = self._decode_sensor_bits(
-                sys_status.onboard_control_sensors_present,
+                present_mask,
                 sys_status.onboard_control_sensors_enabled,
                 sys_status.onboard_control_sensors_health,
             )
             if not sensors:
                 lines.append(i18n.t("info_no_sensors"))
             for name, present, enabled, healthy in sensors:
-                mark = "OK" if (enabled and healthy) else ("--" if not enabled else i18n.t("info_sensor_unhealthy"))
+                if enabled and healthy:
+                    mark = "OK"
+                elif not enabled:
+                    mark = "--"
+                else:
+                    # несправний -- перевіряємо, чи є зовнішнім датчиком
+                    bit_val = None
+                    for bit, entry in _mu.mavlink.enums["MAV_SYS_STATUS_SENSOR"].items():
+                        if bit == 0 or (bit & (bit - 1)) != 0:
+                            continue
+                        n = entry.name.replace("MAV_SYS_STATUS_", "").replace("_", " ").title()
+                        if n == name and bit in _EXTERNAL_SENSOR_BITS:
+                            bit_val = bit
+                            break
+                    if bit_val is not None:
+                        mark = i18n.t("info_sensor_unhealthy") + " " + i18n.t("info_sensor_absent_hint")
+                    else:
+                        mark = i18n.t("info_sensor_unhealthy")
                 lines.append(f"  {name:<28} {mark}")
             lines.append("")
+
+            # --- Барометр: абсолютний тиск і температура ---
+            if scaled_pressure is not None:
+                temp_c = scaled_pressure.temperature / 100.0
+                lines.append(i18n.t(
+                    "info_baro_fmt",
+                    press=scaled_pressure.press_abs,
+                    temp=temp_c,
+                ))
+                lines.append("")
+
             na = i18n.t("value_na")
             voltage_s = f"{sys_status.voltage_battery / 1000.0:.2f}" if sys_status.voltage_battery not in (0, 65535) else na
             current_s = f"{sys_status.current_battery / 100.0:.2f}" if sys_status.current_battery >= 0 else na
@@ -589,18 +685,42 @@ class ArduPilotLinkMixin:
         lines.append("-" * 44)
         scanned_lua_files = scanned_lua_files or []
         scripted_commands = scripted_commands or []
+        scripts_meta = scripts_meta or {}
         if scanned_lua_files:
             by_file: dict[str, list[dict]] = {}
             for cmd in scripted_commands:
                 by_file.setdefault(cmd["source_file"], []).append(cmd)
 
             for filename in scanned_lua_files:
-                lines.append(i18n.t("info_script_file_fmt", name=filename))
+                meta = scripts_meta.get(filename, {})
+
+                # --- заголовок файлу ---
+                display_name = meta.get("script_name") or filename
+                version_str  = f" v{meta['script_version']}" if meta.get("script_version") else ""
+                lines.append(i18n.t("info_script_file_fmt", name=f"{display_name}{version_str}"))
+
+                # --- тип скрипта ---
+                stype = meta.get("script_type")
+                if stype == "background":
+                    lines.append("  " + i18n.t("info_script_type_background"))
+                elif stype == "mission":
+                    lines.append("  " + i18n.t("info_script_type_mission"))
+
+                # --- опис ---
+                if meta.get("script_desc"):
+                    lines.append(f"  {meta['script_desc']}")
+
                 cmds = by_file.get(filename, [])
-                if not cmds:
+                markup_cmds    = [c for c in cmds if c.get("from_markup")]
+                heuristic_cmds = [c for c in cmds if not c.get("from_markup")]
+
+                if not meta.get("has_markup") and not cmds:
                     lines.append("  " + i18n.t("info_script_no_markup"))
+                    lines.append("")
                     continue
-                for cmd in cmds:
+
+                # повна розмітка (рівень 1)
+                for cmd in markup_cmds:
                     lines.append("  " + i18n.t(
                         "info_script_cmd_embed_fmt", cmd=cmd["cmd"], name=cmd["name"],
                     ))
@@ -609,6 +729,17 @@ class ArduPilotLinkMixin:
                             "info_script_param_fmt",
                             slot=p["slot"], label=p["label"], unit=p["unit"],
                         ))
+
+                # евристика (рівень 2)
+                if heuristic_cmds:
+                    if markup_cmds:
+                        lines.append("  " + i18n.t("info_script_heuristic_header"))
+                    for cmd in heuristic_cmds:
+                        lines.append("  " + i18n.t(
+                            "info_script_heuristic_cmd_fmt",
+                            cmd=cmd["cmd"], name=cmd["name"],
+                        ))
+
                 lines.append("")
         else:
             lines.append(i18n.t("info_no_scripted_commands"))
@@ -617,9 +748,9 @@ class ArduPilotLinkMixin:
 
 
     def _on_flight_info_ready(self, report: str | None, error: str | None):
-        self._ardu_info_btn.configure(state="normal")
         self.status_var.set("")
         if error or report is None:
+            self._ardu_info_btn.configure(state="normal")
             messagebox.showerror(i18n.t("msg_update_title"), i18n.t("info_fetch_error_fmt", error=error or "?"))
             return
         self._show_flight_info_dialog(report)
@@ -628,15 +759,221 @@ class ArduPilotLinkMixin:
     def _show_flight_info_dialog(self, report_text: str):
         dlg = tk.Toplevel(self)
         dlg.title(i18n.t("dlg_flight_info_title"))
-        dlg.geometry("560x560")
+        dlg.geometry("560x780")
         dlg.transient(self)
 
+        def _on_close():
+            self._stop_hud_telemetry()
+            dlg.destroy()
+            self._ardu_info_btn._is_toggle_active = False
+            self._refresh_toggle_action_button_colors(self._toggle_buttons_registry)
+            self._ardu_info_btn.configure(state="normal")
+
+        # --- HUD-панель (верхня частина) ---
+        hud_frame = tk.Frame(dlg, bg="#111111")
+        hud_frame.pack(fill="x", padx=8, pady=(8, 4))
+
+        HUD_W, HUD_H = 300, 170
+        hud_canvas = tk.Canvas(
+            hud_frame, width=HUD_W, height=HUD_H,
+            bg="#1a3a5a", highlightthickness=1, highlightbackground="#333",
+        )
+        hud_canvas.pack(side="left", padx=(0, 10))
+
+        data_frame = tk.Frame(hud_frame, bg="#111111")
+        data_frame.pack(side="left", fill="y", anchor="w")
+
+        _DATA_FONT = ("Consolas", 11, "bold")
+        _DATA_FG = "#00ff88"
+        _DATA_BG = "#111111"
+        roll_var  = tk.StringVar(value="ROLL:  ---")
+        pitch_var = tk.StringVar(value="PITCH: ---")
+        alt_var   = tk.StringVar(value="ALT:   ---")
+        temp_var  = tk.StringVar(value="TEMP:  ---")
+
+        for var in (roll_var, pitch_var, alt_var, temp_var):
+            tk.Label(data_frame, textvariable=var, bg=_DATA_BG, fg=_DATA_FG,
+                     font=_DATA_FONT, anchor="w").pack(anchor="w", pady=3)
+
+        # ініціалізуємо температуру відразу -- вона вже відома з початкового
+        # запиту (SCALED_PRESSURE), не потребує реального часу
+        if getattr(self, "_hud_baro_temp", None) is not None:
+            temp_var.set(f"TEMP:  {self._hud_baro_temp:.1f}°C")
+
+        # --- Текстовий звіт (нижня частина) ---
         text = scrolledtext.ScrolledText(dlg, wrap="word", font=("Consolas", 9))
         text.pack(fill="both", expand=True, padx=8, pady=8)
         text.insert("end", report_text)
         theme.make_text_readonly(text)
 
-        dlg.grab_set()
+        # --- Старт живого потоку телеметрії ---
+        self._hud_state = {"roll": 0.0, "pitch": 0.0, "alt": 0.0, "active": True}
+        self._start_hud_telemetry()
+
+        def _update_hud():
+            if not dlg.winfo_exists():
+                return
+            s = self._hud_state
+            roll_r  = s.get("roll", 0.0)
+            pitch_r = s.get("pitch", 0.0)
+            alt     = s.get("alt", 0.0)
+            self._draw_artificial_horizon(hud_canvas, roll_r, pitch_r)
+            roll_var.set(f"ROLL:  {math.degrees(roll_r):+.1f}°")
+            pitch_var.set(f"PITCH: {math.degrees(pitch_r):+.1f}°")
+            alt_var.set(f"ALT:   {alt:.1f} м")
+            dlg.after(100, _update_hud)
+
+        dlg.after(200, _update_hud)
+        dlg.protocol("WM_DELETE_WINDOW", _on_close)
+
+
+    @staticmethod
+    def _draw_artificial_horizon(canvas: tk.Canvas, roll_rad: float, pitch_rad: float):
+        """Малює мінімальний штучний горизонт (крен/тангаж) на Canvas.
+        Небо -- синє, земля -- коричнева, лінія горизонту -- біла.
+        Координати canvas: x -- праворуч, y -- вниз (стандарт Tkinter)."""
+        W = canvas.winfo_width()  or int(canvas.cget("width"))
+        H = canvas.winfo_height() or int(canvas.cget("height"))
+        cx, cy = W / 2, H / 2
+        PX_PER_DEG = 2.2
+
+        # зміщення горизонту по висоті: більший тангаж = горизонт нижче
+        # (більше неба видно вгорі)
+        pitch_deg = math.degrees(pitch_rad)
+        hy = cy + pitch_deg * PX_PER_DEG
+
+        # напрямок лінії горизонту (обертається разом з кутом крену)
+        line_dx = math.cos(roll_rad)
+        line_dy = math.sin(roll_rad)  # позитивний крен → правий бік нижче
+
+        # нормаль "вгору" (убік неба, перпендикулярно горизонту)
+        sky_nx =  math.sin(roll_rad)
+        sky_ny = -math.cos(roll_rad)
+
+        def is_sky(px, py):
+            return (px - cx) * sky_nx + (py - hy) * sky_ny > 0
+
+        # кінці лінії горизонту далеко за межі canvas
+        ext = max(W, H) * 2
+        hx1, hy1 = cx - ext * line_dx, hy - ext * line_dy
+        hx2, hy2 = cx + ext * line_dx, hy + ext * line_dy
+
+        corners = [(0, 0), (W, 0), (W, H), (0, H)]
+        above = [is_sky(x, y) for x, y in corners]
+
+        sky_poly = [hx1, hy1]
+        for i, (x, y) in enumerate(corners):
+            if above[i]: sky_poly += [x, y]
+        sky_poly += [hx2, hy2]
+
+        ground_poly = [hx2, hy2]
+        for i, (x, y) in enumerate(corners):
+            if not above[i]: ground_poly += [x, y]
+        ground_poly += [hx1, hy1]
+
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, W, H, fill="#1B6CB7", outline="")  # небо
+        if len(ground_poly) >= 6:
+            canvas.create_polygon(ground_poly, fill="#8B5C20", outline="")  # земля
+
+        # сходинки тангажу
+        for deg in [-20, -15, -10, -5, 5, 10, 15, 20]:
+            off = -deg * PX_PER_DEG * sky_ny, -deg * PX_PER_DEG * (-sky_nx)
+            tcx = cx - deg * PX_PER_DEG * sky_nx
+            tcy = hy - deg * PX_PER_DEG * sky_ny
+            hw = 25 if deg % 10 == 0 else 12
+            canvas.create_line(
+                tcx - hw * line_dx, tcy - hw * line_dy,
+                tcx + hw * line_dx, tcy + hw * line_dy,
+                fill="white", width=1,
+            )
+
+        # лінія горизонту
+        canvas.create_line(hx1, hy1, hx2, hy2, fill="white", width=2)
+
+        # дуга крену вгорі + позначки
+        arc_r = min(cx, cy) - 12
+        for angle_deg in (0, 10, 20, 30, -10, -20, -30, 45, -45, 60, -60):
+            a = math.radians(angle_deg)
+            ax = cx + arc_r * math.sin(a)
+            ay = cy - arc_r * math.cos(a)
+            tlen = 9 if angle_deg in (0, 30, -30, 60, -60) else 5
+            ax2 = cx + (arc_r - tlen) * math.sin(a)
+            ay2 = cy - (arc_r - tlen) * math.cos(a)
+            canvas.create_line(ax, ay, ax2, ay2, fill="#bbbbbb", width=1)
+
+        # трикутник-покажчик крену
+        tri_r = arc_r - 2
+        a = roll_rad
+        tx  = cx + tri_r * math.sin(a)
+        ty  = cy - tri_r * math.cos(a)
+        tb1x = cx + (tri_r + 10) * math.sin(a - math.radians(5))
+        tb1y = cy - (tri_r + 10) * math.cos(a - math.radians(5))
+        tb2x = cx + (tri_r + 10) * math.sin(a + math.radians(5))
+        tb2y = cy - (tri_r + 10) * math.cos(a + math.radians(5))
+        canvas.create_polygon([tx, ty, tb1x, tb1y, tb2x, tb2y], fill="white", outline="")
+
+        # нерухомий символ ПС (центральний хрест -- фіксований, не обертається)
+        canvas.create_line(cx - 38, cy, cx - 10, cy, fill="#FFD700", width=3)
+        canvas.create_line(cx + 10, cy, cx + 38, cy, fill="#FFD700", width=3)
+        canvas.create_oval(cx - 4, cy - 4, cx + 4, cy + 4, fill="#FFD700", outline="")
+
+
+    def _start_hud_telemetry(self):
+        """Запитує потік ATTITUDE і VFR_HUD і запускає фоновий потік-приймач."""
+        conn = self._flight_conn
+        if conn is None:
+            return
+        from pymavlink import mavutil
+        ts, tc = conn.target_system, conn.target_component
+        # ATTITUDE ~ 10 Гц
+        conn.mav.command_long_send(
+            ts, tc, mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+            mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 100_000, 0, 0, 0, 0, 0,
+        )
+        # VFR_HUD ~ 5 Гц (для висоти)
+        conn.mav.command_long_send(
+            ts, tc, mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+            mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, 200_000, 0, 0, 0, 0, 0,
+        )
+        threading.Thread(target=self._hud_receive_loop, daemon=True).start()
+
+
+    def _stop_hud_telemetry(self):
+        """Зупиняє потік телеметрії й скасовує запит на потокові повідомлення."""
+        self._hud_state["active"] = False
+        conn = self._flight_conn
+        if conn is None:
+            return
+        from pymavlink import mavutil
+        ts, tc = conn.target_system, conn.target_component
+        # -1 = зупинити потік (повернути до дефолтної частоти)
+        conn.mav.command_long_send(
+            ts, tc, mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+            mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, -1, 0, 0, 0, 0, 0,
+        )
+        conn.mav.command_long_send(
+            ts, tc, mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+            mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, -1, 0, 0, 0, 0, 0,
+        )
+
+
+    def _hud_receive_loop(self):
+        """Фоновий потік: отримує ATTITUDE і VFR_HUD і кладе у self._hud_state.
+        Завершується, коли hud_state["active"] стає False (діалог закрито)."""
+        conn = self._flight_conn
+        while self._hud_state.get("active") and conn is not None:
+            msg = conn.recv_match(
+                type=["ATTITUDE", "VFR_HUD"], blocking=True, timeout=0.3,
+            )
+            if msg is None:
+                continue
+            t = msg.get_type()
+            if t == "ATTITUDE":
+                self._hud_state["roll"]  = msg.roll
+                self._hud_state["pitch"] = msg.pitch
+            elif t == "VFR_HUD":
+                self._hud_state["alt"] = msg.alt
 
 
     def _load_mission_from_mavlink(self):
@@ -986,9 +1323,9 @@ class ArduPilotLinkMixin:
 
 
     def _on_scripted_commands_scan_ready(self, report: str | None, error: str | None):
-        self._ardu_commands_btn.configure(state="normal")
         self.status_var.set("")
         if error or report is None:
+            self._ardu_commands_btn.configure(state="normal")
             messagebox.showerror(i18n.t("msg_update_title"), i18n.t("info_fetch_error_fmt", error=error or "?"))
             return
         self._show_scripted_commands_dialog(report)
@@ -1000,11 +1337,237 @@ class ArduPilotLinkMixin:
         dlg.geometry("560x560")
         dlg.transient(self)
 
+        def _on_close():
+            dlg.destroy()
+            self._ardu_commands_btn._is_toggle_active = False
+            self._refresh_toggle_action_button_colors(self._toggle_buttons_registry)
+            self._ardu_commands_btn.configure(state="normal")
+
         text = scrolledtext.ScrolledText(dlg, wrap="word", font=("Consolas", 9))
         text.pack(fill="both", expand=True, padx=8, pady=8)
         text.insert("end", report_text)
         theme.make_text_readonly(text)
 
-        dlg.grab_set()
+        dlg.protocol("WM_DELETE_WINDOW", _on_close)
 
 
+
+    # ============================================================
+    # "Параметри" -- читання критичних параметрів місії з борта
+    # ============================================================
+
+    # Параметри, що реально впливають на безпеку виконання місії.
+    # Запитуємо кожен ОКРЕМО через PARAM_REQUEST_READ (не весь список
+    # з ~1000 параметрів) -- швидко й без зайвого трафіку.
+    # Формат: (назва_параметру, опис_uk, опис_en)
+    # Набір параметрів ЗАЛЕЖИТЬ ВІД ТИПУ АПАРАТУ -- для крила, коптера й
+    # ровера критичні РІЗНІ речі. Ключ -- набір значень MAV_TYPE з тієї
+    # самої sysid_state, що вже використовується для відображення типу в
+    # Info-звіті. Методи _key_params_for_vehicle() повертає потрібний список.
+
+    _KEY_PARAMS_PLANE = [
+        # --- Швидкості (ArduPlane 4.5+: нові назви й одиниці) ---
+        ("AIRSPEED_CRUISE", "Крейсерська швидкість (м/с)",    "Cruise airspeed (m/s)"),
+        ("AIRSPEED_MIN",    "Мін. швидкість (м/с)",           "Min airspeed (m/s)"),
+        ("AIRSPEED_MAX",    "Макс. швидкість (м/с)",          "Max airspeed (m/s)"),
+        ("ARSPD_TYPE",      "Тип датчика швидкості",          "Airspeed sensor type"),
+        # --- Кути (впливають на маневри в AUTO/GUIDED, зокрема Змійку) ---
+        # ROLL_LIMIT_DEG обмежує крен у FBWA/AUTO/RTL -- якщо замалий,
+        # Змійка з великою амплітудою або коротким періодом не зможе
+        # відслідкувати бокові цілі (самолот просто не долетить до них)
+        ("ROLL_LIMIT_DEG",  "Макс. крен (°)",                 "Max bank angle (deg)"),
+        ("PTCH_LIM_MAX_DEG","Макс. тангаж вгору (°)",         "Max pitch up (deg)"),
+        ("PTCH_LIM_MIN_DEG","Макс. тангаж вниз (°)",          "Max pitch down (deg)"),
+        # --- Висоти ---
+        ("RTL_ALTITUDE",    "Висота RTL (м)",                 "RTL altitude (m)"),
+        ("TKOFF_ALT",       "Висота набору після зльоту (м)", "Takeoff altitude (m)"),
+        ("FENCE_ALT_MAX",   "Макс. висота забору (м)",        "Fence max altitude (m)"),
+        # --- Failsafe ---
+        ("FS_SHORT_ACTN",   "Failsafe короткий (дія)",        "Short failsafe action"),
+        ("FS_LONG_ACTN",    "Failsafe довгий (дія)",          "Long failsafe action"),
+        ("FS_GCS_ENABL",    "Failsafe GCS увімкнено",         "GCS failsafe enabled"),
+        # --- Батарея (для крила менш критична, але знати варто) ---
+        ("BATT_LOW_VOLT",   "Низький заряд (В)",              "Low battery voltage (V)"),
+        ("BATT_CRT_VOLT",   "Критичний заряд (В)",            "Critical battery voltage (V)"),
+        ("BATT_FS_LOW_ACT", "Дія при низькому заряді",        "Low battery action"),
+        # --- Забор ---
+        ("FENCE_ENABLE",    "Геозабор увімкнено",             "Geofence enabled"),
+        ("FENCE_TYPE",      "Тип забору",                     "Fence type"),
+        ("FENCE_ACTION",    "Дія забору",                     "Fence action"),
+        # --- Посадка ---
+        ("LAND_FLARE_ALT",  "Висота вирівнювання (м)",        "Flare altitude (m)"),
+        ("RTL_AUTOLAND",    "Авто-посадка після RTL",         "Auto-land after RTL"),
+        # --- Ідентифікація ---
+        ("SYSID_THISMAV",   "MAVLink System ID борта",        "MAVLink System ID"),
+        ("BRD_SERIAL_NUM",  "Серійний номер плати",           "Board serial number"),
+    ]
+
+    _KEY_PARAMS_COPTER = [
+        # --- Батарея -- КРИТИЧНО для коптера (сів заряд = падіння) ---
+        ("BATT_LOW_VOLT",   "Низький заряд (В)",              "Low battery voltage (V)"),
+        ("BATT_CRT_VOLT",   "Критичний заряд (В)",            "Critical battery voltage (V)"),
+        ("BATT_LOW_MAH",    "Низький заряд (мАг)",            "Low battery (mAh)"),
+        ("BATT_FS_LOW_ACT", "Дія при низькому заряді",        "Low battery action"),
+        ("BATT_FS_CRT_ACT", "Дія при критичному заряді",      "Critical battery action"),
+        # --- Висоти ---
+        ("RTL_ALT",         "Висота RTL (см)",                "RTL altitude (cm)"),
+        ("FENCE_ALT_MAX",   "Макс. висота забору (м)",        "Fence max altitude (m)"),
+        # --- Швидкості ---
+        ("WPNAV_SPEED",     "Швидкість у місії (см/с)",       "Waypoint speed (cm/s)"),
+        ("WPNAV_SPEED_UP",  "Швидкість підйому (см/с)",       "Climb speed (cm/s)"),
+        ("WPNAV_SPEED_DN",  "Швидкість спуску (см/с)",        "Descent speed (cm/s)"),
+        # --- Failsafe ---
+        ("FS_THR_ENABLE",   "Failsafe RC увімкнено",          "RC failsafe enabled"),
+        ("FS_THR_VALUE",     "Поріг RC failsafe (мкс)",       "RC failsafe threshold (us)"),
+        ("FS_GCS_ENABLE",   "Failsafe GCS увімкнено",         "GCS failsafe enabled"),
+        # --- Забор ---
+        ("FENCE_ENABLE",    "Геозабор увімкнено",             "Geofence enabled"),
+        ("FENCE_TYPE",      "Тип забору",                     "Fence type"),
+        ("FENCE_ACTION",    "Дія забору",                     "Fence action"),
+        # --- Ідентифікація ---
+        ("SYSID_THISMAV",   "MAVLink System ID борта",        "MAVLink System ID"),
+        ("BRD_SERIAL_NUM",  "Серійний номер плати",           "Board serial number"),
+    ]
+
+    _KEY_PARAMS_ROVER = [
+        # --- Швидкості ---
+        ("CRUISE_SPEED",    "Крейсерська швидкість (м/с)",    "Cruise speed (m/s)"),
+        ("CRUISE_THROTTLE", "Крейсерський газ (%)",           "Cruise throttle (%)"),
+        ("WP_SPEED",        "Швидкість до точки (м/с)",       "Waypoint speed (m/s)"),
+        # --- Failsafe ---
+        ("FS_THR_ENABLE",   "Failsafe RC увімкнено",          "RC failsafe enabled"),
+        ("FS_GCS_ENABLE",   "Failsafe GCS увімкнено",         "GCS failsafe enabled"),
+        # --- Батарея ---
+        ("BATT_LOW_VOLT",   "Низький заряд (В)",              "Low battery voltage (V)"),
+        ("BATT_CRT_VOLT",   "Критичний заряд (В)",            "Critical battery voltage (V)"),
+        ("BATT_FS_LOW_ACT", "Дія при низькому заряді",        "Low battery action"),
+        # --- Забор ---
+        ("FENCE_ENABLE",    "Геозабор увімкнено",             "Geofence enabled"),
+        ("FENCE_TYPE",      "Тип забору",                     "Fence type"),
+        ("FENCE_ACTION",    "Дія забору",                     "Fence action"),
+        # --- Ідентифікація ---
+        ("SYSID_THISMAV",   "MAVLink System ID борта",        "MAVLink System ID"),
+        ("BRD_SERIAL_NUM",  "Серійний номер плати",           "Board serial number"),
+    ]
+
+    # MAV_TYPE значення, що відповідають кожному типу апарату
+    _PLANE_TYPES = frozenset([1, 19, 20, 21, 22, 23, 24, 25])   # Fixed-wing + VTOL
+    _COPTER_TYPES = frozenset([2, 13, 14, 15, 16, 29, 35])       # Quad/Hexa/Octo/Tri/etc
+    _ROVER_TYPES = frozenset([10, 11])                            # Rover/Boat
+
+    def _key_params_for_vehicle(self) -> tuple[list, str]:
+        """Повертає (список_параметрів, назва_типу) залежно від MAV_TYPE
+        підключеного зараз апарата. Той самий sysid_state, що й у Info."""
+        from pymavlink import mavutil
+        conn = self._flight_conn
+        sysid = getattr(conn, "target_system", None)
+        state = conn.sysid_state.get(sysid) if sysid else None
+        mav_type = state.mav_type if state else None
+
+        if mav_type in self._PLANE_TYPES:
+            return self._KEY_PARAMS_PLANE, i18n.t("vehicle_type_plane")
+        if mav_type in self._COPTER_TYPES:
+            return self._KEY_PARAMS_COPTER, i18n.t("vehicle_type_copter")
+        if mav_type in self._ROVER_TYPES:
+            return self._KEY_PARAMS_ROVER, i18n.t("vehicle_type_rover")
+        # невідомий тип -- показуємо загальний мінімум (Plane як базовий,
+        # бо Mission Analyzer орієнтований на фіксоване крило)
+        return self._KEY_PARAMS_PLANE, i18n.t("vehicle_type_unknown")
+
+    def _show_key_params(self):
+        if self._flight_conn is None:
+            return
+        # визначаємо тип апарату В ГОЛОВНОМУ ПОТОЦІ, де sysid_state
+        # гарантовано актуальний -- а не в фоновому, де можливі
+        # проблеми з потоковою безпекою або порожній target_system
+        params, vehicle_label = self._key_params_for_vehicle()
+        self._ardu_params_btn.configure(state="disabled")
+        self.status_var.set(i18n.t("status_reading_params"))
+        threading.Thread(
+            target=self._key_params_worker,
+            args=(params, vehicle_label),
+            daemon=True,
+        ).start()
+
+
+    def _request_one_param(self, conn, name: str, timeout: float = 2.0) -> float | None:
+        """Запитує ОДИН параметр за ім'ям через PARAM_REQUEST_READ.
+        Повертає float-значення або None якщо не відповів."""
+        conn.mav.param_request_read_send(
+            conn.target_system, conn.target_component,
+            name.encode("ascii"), -1,
+        )
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            msg = conn.recv_match(type="PARAM_VALUE", blocking=True, timeout=0.3)
+            if msg is None:
+                continue
+            if msg.param_id.rstrip("\x00") == name:
+                return float(msg.param_value)
+        return None
+
+
+    def _key_params_worker(self, params: list, vehicle_label: str):
+        conn = self._flight_conn
+        results = []
+        error = None
+
+        def set_progress(text):
+            self.after(0, lambda: self.status_var.set(text))
+
+        try:
+            total = len(params)
+            for i, (name, desc_uk, desc_en) in enumerate(params, 1):
+                set_progress(i18n.t(
+                    "status_reading_param_fmt", name=name, done=i, total=total,
+                ))
+                value = self._request_one_param(conn, name)
+                results.append((name, desc_uk, desc_en, value))
+        except Exception as e:
+            error = str(e)
+
+        self.after(0, lambda: self._on_key_params_ready(results, error, vehicle_label))
+
+
+    def _on_key_params_ready(self, results, error, vehicle_label=""):
+        self.status_var.set("")
+        if error:
+            self._ardu_params_btn.configure(state="normal")
+            messagebox.showerror("MAVLink", error)
+            return
+        self._show_key_params_dialog(results, vehicle_label)
+
+
+    def _show_key_params_dialog(self, results, vehicle_label=""):
+        dlg = tk.Toplevel(self)
+        title = i18n.t("dlg_params_title")
+        if vehicle_label:
+            title += f" — {vehicle_label}"
+        dlg.title(title)
+        dlg.geometry("520x560")
+        dlg.transient(self)
+
+        def _on_close():
+            dlg.destroy()
+            self._ardu_params_btn._is_toggle_active = False
+            self._refresh_toggle_action_button_colors(self._toggle_buttons_registry)
+            self._ardu_params_btn.configure(state="normal")
+
+        import theme as _theme
+        _pal = _theme.PALETTE_DARK if self._is_dark_theme() else _theme.PALETTE_LIGHT
+        dlg.configure(bg=_pal["bg"])
+
+        text = scrolledtext.ScrolledText(dlg, wrap="none", font=("Consolas", 9))
+        text.pack(fill="both", expand=True, padx=8, pady=8)
+
+        desc_key = "uk" if i18n.get_lang() == "uk" else "en"
+        header = title
+        lines = [header, "-" * 44, ""]
+        for name, desc_uk, desc_en, value in results:
+            desc = desc_uk if desc_key == "uk" else desc_en
+            val_str = f"{value:.6g}" if value is not None else i18n.t("param_no_response")
+            lines.append(f"{name:<20} {val_str:<12} {desc}")
+        text.insert("end", "\n".join(lines))
+        theme.make_text_readonly(text)
+
+        dlg.protocol("WM_DELETE_WINDOW", _on_close)
