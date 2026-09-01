@@ -96,6 +96,9 @@ class App(
         self._cancel_event: threading.Event | None = None
         self._map_loading = False  # флаг занятости загрузки тайлов (кнопок статуса больше нет)
         self._flight_conn = None   # активне з'єднання з польотним контролером (pymavlink/pyserial)
+        self._scripted_commands = []  # знайдені MCP-COMMAND у .lua на SD
+        self._hud_baro_temp = None    # температура барометра для HUD (оновлюється при кожному Info)
+        self._hud_state = {}          # поточний стан HUD (roll/pitch/alt) -- заповнюється потоком
 
         # --- реєстр для перемикання мови БЕЗ перестворення дерева віджетів ---
         # _i18n_registry: (widget, option, key, kwargs) -- прості статичні
@@ -156,6 +159,17 @@ class App(
 
 
     def _on_close(self):
+        # закриваємо всі відкриті дочірні діалоги (Toplevel) перед виходом --
+        # grab_set() на діалозі перехоплює події миші/клавіатури, через що
+        # хрестик головного вікна не отримував клік; явне destroy() знімає
+        # grab і дає програмі коректно завершитись незалежно від того, який
+        # діалог відкритий (Info, Команди, Параметри, Файли SD тощо).
+        for widget in self.winfo_children():
+            if isinstance(widget, tk.Toplevel):
+                try:
+                    widget.destroy()
+                except Exception:
+                    pass
         self._save_settings()
         self.destroy()
 
