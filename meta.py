@@ -10,10 +10,83 @@ version.py + changelog.py — обидва були зовсім маленьк�
 
 from __future__ import annotations
 
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 AUTHOR = "Sergey Gorbachevsky"
 
 ENTRIES = [
+    {
+        "version": "1.0.5",
+        "date": "2026-09-01",
+        "uk": (
+            "Кнопка «Команди» — живий тест підключеного контролера: "
+            "перевіряє ~186 команд MAVLink по черзі через мініатюрні тестові "
+            "місії і показує, які саме прийняті прошивкою як елемент місії "
+            "(не за документацією, а реальним запитом). Поточна місія на платі "
+            "тимчасово підмінюється й відновлюється автоматично. Прогрес видно "
+            "в рядку стану по кожній команді.\n\n"
+            "Кнопка «Параметри» — читає критичні параметри місії безпосередньо "
+            "з підключеного борту. Набір параметрів залежить від типу апарату "
+            "(крило, коптер, ровер): для крила — швидкості, висоти RTL, "
+            "максимальний крен, failsafe; для коптера — батарея на першому місці. "
+            "Діалог показує значення з підписами на мові інтерфейсу і підтримує "
+            "копіювання правою кнопкою.\n\n"
+            "Кнопка «Info» тепер показує живий HUD (штучний горизонт): крен, "
+            "тангаж, висота і температура барометра оновлюються в реальному часі "
+            "поки діалог відкритий. Нижче — текстовий звіт як раніше.\n\n"
+            "Сканування Lua-скриптів (APM/scripts/) розширено: новий стандарт "
+            "розмітки MCP-NAME/MCP-TYPE/MCP-VERSION/MCP-DESC дозволяє описати "
+            "призначення будь-якого скрипта — не лише команди місії, а й фонові "
+            "скрипти. Для скриптів без розмітки евристика шукає номери команд у "
+            "коді (паттерни local CMD_X = 80, if cmd == 80) і показує їх з "
+            "технічними іменами констант.\n\n"
+            "Виправлено показ git-хешу прошивки: раніше виводився hex-дамп байтів "
+            "(3364623462633765), тепер коректно декодується як ASCII (3db4bc7e). "
+            "Додано відображення версій middleware та OS з AUTOPILOT_VERSION — "
+            "там може зберігатись кастомний номер версії виробника БПЛА.\n\n"
+            "Датчики у звіті Info: для зовнішніх датчиків (GPS, диференційний "
+            "тиск, RC-приймач) при несправності додається підказка «(відсутній?)» "
+            "— щоб відрізняти реальну несправність від просто непідключеного "
+            "обладнання. Показується абсолютний тиск і температура барометра.\n\n"
+            "Кнопки Info/Команди/Параметри/Файли SD лишаються візуально «натиснутими» "
+            "поки відповідний діалог відкритий, і відтискаються точно при його "
+            "закритті — незалежно від того, чи закрив користувач хрестиком чи "
+            "іншим способом."
+        ),
+        "en": (
+            "\"Commands\" button — live test of the connected controller: checks "
+            "~186 MAVLink commands one by one via minimal test missions and shows "
+            "which ones the firmware actually accepts as a mission item (a real "
+            "query, not documentation). The current mission on the board is "
+            "temporarily replaced and automatically restored. Progress is shown "
+            "in the status bar per command.\n\n"
+            "\"Parameters\" button — reads mission-critical parameters directly "
+            "from the connected vehicle. The parameter set depends on vehicle type "
+            "(fixed-wing, copter, rover): for fixed-wing — airspeeds, RTL altitude, "
+            "max bank angle, failsafe; for copter — battery parameters first. "
+            "The dialog shows values with labeled descriptions in the UI language "
+            "and supports right-click copy.\n\n"
+            "The \"Info\" button now shows a live HUD (artificial horizon): roll, "
+            "pitch, altitude, and barometer temperature update in real time while "
+            "the dialog is open. The text report is shown below as before.\n\n"
+            "Lua script scanning (APM/scripts/) extended: a new markup standard "
+            "MCP-NAME/MCP-TYPE/MCP-VERSION/MCP-DESC lets you describe any script's "
+            "purpose — not just mission commands but also background scripts. "
+            "For scripts without markup, heuristics search for command numbers in "
+            "code (patterns like local CMD_X = 80, if cmd == 80) and show them "
+            "with their constant names.\n\n"
+            "Fixed firmware git hash display: previously showed a hex dump of bytes "
+            "(3364623462633765), now correctly decoded as ASCII (3db4bc7e). Added "
+            "middleware and OS version fields from AUTOPILOT_VERSION — these may "
+            "contain the manufacturer's custom firmware version number.\n\n"
+            "Sensors in the Info report: external sensors (GPS, differential "
+            "pressure, RC receiver) now show \"(absent?)\" when unhealthy — "
+            "to distinguish a real fault from simply unplugged hardware. Absolute "
+            "barometric pressure and temperature are now displayed.\n\n"
+            "Info/Commands/Parameters/SD Files buttons remain visually pressed "
+            "while their dialog is open and release exactly when it is closed — "
+            "whether the user pressed the X or closed it any other way."
+        ),
+    },
     {
         "version": "1.0.4",
         "date": "2026-08-29",
