@@ -1,98 +1,81 @@
-# Making Your ArduPilot Lua Scripts Visible in Mission Analyzer
+# MCP Markup: Making Your ArduPilot Lua Scripts Visible in Mission Analyzer
 
-If you write Lua scripts for ArduPilot and use them as mission items
-via `NAV_SCRIPT_TIME` (MAV_CMD 42702), this post explains how to make
-those scripts show up properly in Mission Analyzer — with their
-commands listed, parameters labeled, and ready-to-copy embedding
-instructions.
-
----
-
-## The problem
-
-ArduPilot uses a single MAVLink command — `NAV_SCRIPT_TIME` (42702) —
-for *any* Lua script logic inside a mission. The protocol itself has
-no concept of "which script" or "what command 80 means". That
-knowledge lives only inside the `.lua` file on the SD card.
-
-So when Mission Analyzer scans `APM/scripts/`, it sees the `.lua`
-files, but without a structured way to read them, it can only say:
-*"this script exists."*
+Mission Analyzer scans `APM/scripts/` on the SD card and shows what
+Lua scripts are loaded — their purpose, type, and (for mission scripts)
+how to embed them. This requires a small block of structured comments
+in the script header, called **MCP markup**.
 
 ---
 
-## Two levels of recognition
+## Script types
 
-Mission Analyzer reads scripts with two strategies, from best to
-least informative:
+ArduPilot Lua scripts fall into two categories:
 
-### Level 1 — MCP markup (full information)
+**Mission scripts** use `vehicle:nav_script_time()` to receive commands
+from a `NAV_SCRIPT_TIME` (42702) mission item. The flight controller
+pauses at that waypoint, runs the script logic, and continues when the
+script calls `vehicle:nav_script_time_done()`.
 
-You add a small block of structured comments to your script's header.
-The scanner reads those comments (it does **not** execute any Lua
-code) and extracts the complete picture: command numbers, human-
-readable names, parameter labels, units.
+**Background scripts** start automatically with ArduPilot and run
+continuously alongside the mission. They cannot be triggered by a
+waypoint. Examples: telemetry forwarders, engine controllers, LED
+managers.
 
-Result in the Info report:
-
-```
-snake-sine-plane.lua:
-  Command 80 "Sinusoidal snake" — embed as NAV_SCRIPT_TIME (42702), param1=80:
-    param2 = Duration (s)
-    param3 = Amplitude (m)
-    param4 = Wave period (s)
-  Command 81 "Emergency abort" — embed as NAV_SCRIPT_TIME (42702), param1=81:
-```
-
-### Level 2 — Heuristic detection (partial information)
-
-If there is no markup, the scanner looks for patterns like
-`local CMD_SPRAY_START = 42` or `if cmd == 42 then` and extracts
-just the numbers and any constant names it can find. No parameter
-descriptions, no embedding instructions.
-
-Result in the Info report:
-
-```
-spray.lua:
-  Heuristically detected commands (no description, no parameters):
-  Command 42 (CMD_SPRAY_START) — no description
-  Command 43 (CMD_SPRAY_STOP) — no description
-```
-
-Better than nothing, but significantly less useful than markup.
+Mission Analyzer needs to know which type your script is — and for
+mission scripts, which command numbers it accepts and what each
+parameter means.
 
 ---
 
 ## The markup format
 
-Add a block like this to your script's header (before any Lua code).
-Each line must be a Lua comment (`--`):
+Add this block to the **top of your script**, before any Lua code.
+Every line is a standard Lua comment (`--`):
 
 ```lua
--- MCP-COMMAND: <number> "<human-readable name>"
--- MCP-PARAM: <slot> <key> "<label>" <unit>
--- MCP-PARAM: ...
+-- MCP-NAME: "Human-readable script name"     [required]
+-- MCP-TYPE: mission | background              [required]
+-- MCP-VERSION: 1.0                            [optional]
+-- MCP-DESC: First line of description.        [optional, repeatable]
+-- MCP-DESC: Continuation — each MCP-DESC line is joined with a space.
 --
--- MCP-COMMAND: <number> "<human-readable name>"
--- (no params for this one)
+-- MCP-COMMAND: <number> "<command name>"      [mission scripts only]
+-- MCP-PARAM: <slot> <key> "<label>" <unit>    [after MCP-COMMAND]
 ```
 
-Rules:
-- `MCP-COMMAND` declares one command. `<number>` is the value you
-  put in `param1` of `NAV_SCRIPT_TIME`. `<name>` is in double quotes.
-- `MCP-PARAM` lines belong to the **last** `MCP-COMMAND` above them
-  (until the next `MCP-COMMAND` or end of block).
-- `<slot>` is one of `param2`, `param3`, `param4` (these map to
-  `arg1`, `arg2`, `arg3` in the Lua API).
-- `<key>` is a short internal identifier (no spaces).
-- `<label>` is the human-readable field name, in double quotes.
-- `<unit>` is the unit string (no spaces; use `—` for dimensionless).
+**Field reference:**
 
-### Full example
+| Tag | Required | Description |
+|-----|----------|-------------|
+| `MCP-NAME` | yes | Short human-readable name shown in the Info report |
+| `MCP-TYPE` | yes | `mission` or `background` |
+| `MCP-VERSION` | no | Your version string, shown next to the name |
+| `MCP-DESC` | no | Description text; repeat for multiple lines |
+| `MCP-COMMAND` | mission only | Declares one command: number + quoted name |
+| `MCP-PARAM` | after MCP-COMMAND | One line per parameter of that command |
+
+**MCP-PARAM syntax:**
+`MCP-PARAM: <slot> <key> "<label>" <unit>`
+- `<slot>` — `param2`, `param3`, or `param4`
+  (these are `arg1`, `arg2`, `arg3` in the Lua API)
+- `<key>` — short internal identifier, no spaces
+- `<label>` — human-readable name, in double quotes
+- `<unit>` — unit string, no spaces (`s`, `m`, `deg`, `—` for dimensionless)
+
+`MCP-PARAM` lines belong to the last `MCP-COMMAND` above them.
+
+---
+
+## Example: mission script
 
 ```lua
--- my-script.lua
+-- my-spray.lua
+--
+-- MCP-NAME: "Spray system controller"
+-- MCP-TYPE: mission
+-- MCP-VERSION: 2.1
+-- MCP-DESC: Controls the spray pump via NAV_SCRIPT_TIME mission items.
+-- MCP-DESC: Command 10 starts spraying, command 11 stops it.
 --
 -- MCP-COMMAND: 10 "Start spray"
 -- MCP-PARAM: param2 duration "Duration" s
@@ -100,19 +83,18 @@ Rules:
 --
 -- MCP-COMMAND: 11 "Stop spray"
 
-local CMD_START = 10
-local CMD_STOP  = 11
+local CMD_START        = 10
+local CMD_STOP         = 11
 local UPDATE_PERIOD_MS = 500
 
 function update()
     local id, cmd, arg1, arg2 = vehicle:nav_script_time()
     if id then
         if cmd == CMD_START then
-            local duration = arg1
-            local width    = arg2
-            -- your logic here
+            start_spray(arg1, arg2)           -- duration, width
             vehicle:nav_script_time_done(id)
         elseif cmd == CMD_STOP then
+            stop_spray()
             vehicle:nav_script_time_done(id)
         end
     end
@@ -122,68 +104,134 @@ end
 return update()
 ```
 
+What Mission Analyzer shows in the Info report:
+
+```
+Spray system controller v2.1
+  type: mission item (embed as NAV_SCRIPT_TIME)
+  Controls the spray pump via NAV_SCRIPT_TIME mission items. Command 10 starts spraying, command 11 stops it.
+  Command 10 "Start spray" — embed as NAV_SCRIPT_TIME (42702), param1=10:
+    param2 = Duration (s)
+    param3 = Swath width (m)
+  Command 11 "Stop spray" — embed as NAV_SCRIPT_TIME (42702), param1=11:
+```
+
 ---
 
-## How to embed in a mission
+## Example: background script
+
+```lua
+-- engine-telemetry.lua
+--
+-- MCP-NAME: "Engine Telemetry"
+-- MCP-TYPE: background
+-- MCP-VERSION: 1.0
+-- MCP-DESC: Reads RPM and EGT from the engine ECU over serial,
+-- MCP-DESC: forwards data to GCS via NAMED_VALUE_FLOAT.
+-- MCP-DESC: Starts automatically with ArduPilot. Not a mission item.
+
+local UPDATE_PERIOD_MS = 50
+
+function update()
+    -- read serial, forward telemetry
+    return update, UPDATE_PERIOD_MS
+end
+
+return update()
+```
+
+What Mission Analyzer shows:
+
+```
+Engine Telemetry v1.0
+  type: background (not a mission item)
+  Reads RPM and EGT from the engine ECU over serial, forwards data
+  to GCS via NAMED_VALUE_FLOAT. Starts automatically with ArduPilot.
+  Not a mission item.
+```
+
+---
+
+## Embedding a mission script in a waypoint file
 
 Once the script is in `APM/scripts/` and `SCR_ENABLE = 1`, add a
 `NAV_SCRIPT_TIME` item to your mission:
 
-| Field   | Value                              |
-|---------|------------------------------------|
-| command | 42702 (`NAV_SCRIPT_TIME`)          |
-| param1  | your command number (e.g. `10`)    |
-| param2  | first argument (e.g. duration)     |
-| param3  | second argument (e.g. width)       |
-| param4  | third argument (if needed)         |
-| lat/lon/alt | leave as 0 (not used)         |
+| Field | Value |
+|-------|-------|
+| command | `42702` (`NAV_SCRIPT_TIME`) |
+| param1 | your command number (e.g. `10`) |
+| param2 | first argument |
+| param3 | second argument |
+| param4 | third argument (if needed) |
+| lat / lon / alt | `0` (not used) |
 
-In `.waypoints` format (QGC WPL 110), a line for command 10 with
-duration=60 s and width=40 m looks like:
+In `.waypoints` format (QGC WPL 110) — command 10, duration=60 s,
+width=40 m, as waypoint index 3:
 
 ```
 3	0	3	42702	10	60	40	0	0	0	0	1
 ```
 
-(columns: `index current frame command param1 param2 param3 param4
-lat lon alt autocontinue`)
+Columns: `index current frame command param1 param2 param3 param4 lat lon alt autocontinue`
+
+---
+
+## Without markup: heuristic detection
+
+If a script has no MCP markup, Mission Analyzer still tries to find
+command numbers using code patterns:
+
+- `local CMD_SPRAY_START = 42` → extracts number and constant name
+- `if cmd == 42 then` → extracts number only
+
+Result in the Info report:
+
+```
+my-script.lua
+  Heuristically detected commands (no description, no parameters):
+  Command 42 (CMD_SPRAY_START) — no description
+```
+
+Heuristic detection only works for mission scripts — background
+scripts are not scanned this way, since their numeric constants are
+not mission command IDs.
 
 ---
 
 ## Why comments, not code analysis?
 
-Lua is a full programming language. A command number could be stored
-in a variable, computed at runtime, or looked up in a table. There is
-no reliable way to extract semantic meaning (parameter descriptions,
-units, human-readable names) by reading code alone — you'd need to
-execute it.
+Lua is a full programming language. A command number can be stored in
+a variable, computed at runtime, or looked up in a table. Reliably
+extracting semantic meaning — parameter descriptions, units,
+human-readable names — from arbitrary Lua code would require executing
+it. That is not safe to do on arbitrary third-party scripts.
 
-Structured comments in a fixed format are the same approach used by
-JSDoc, Python docstrings, and Doxygen: the author states intent
-explicitly, the tool reads it literally. It takes two minutes to add
-and works perfectly every time.
+Structured comments are the same approach used by JSDoc, Python
+docstrings, and Doxygen: the author states intent explicitly, the tool
+reads it literally. Two minutes to write, works every time.
 
 ---
 
-## Uploading your script
+## Uploading scripts to the SD card
 
-You can upload `.lua` files directly to `APM/scripts/` over USB
-without touching the SD card physically:
+Upload `.lua` files to `APM/scripts/` over USB without removing the
+SD card:
 
-- **Mission Analyzer** — SD Files → navigate to `APM/scripts/` →
-  Upload
+- **Mission Analyzer** — SD Files → navigate to `APM/scripts/` → Upload
 - **Mission Planner** — MAVFtp tab
 - **QGroundControl** — Vehicle Setup → Storage
 
-After uploading: reboot the flight controller (or power-cycle) so the
-scripting engine picks up the new file.
+After uploading, reboot the flight controller so the scripting engine
+picks up the new file (`SCR_ENABLE = 1` must be set).
 
 ---
 
 ## See also
 
-- [snake-sine-plane.lua](../DATA/snake-sine-plane.lua) — a complete
-  example with full MCP markup
-- [wipe-passed-waypoints.lua](../DATA/wipe-passed-waypoints.lua) —
-  a background script example (no mission commands, no markup needed)
+- [`snake-sine-plane.lua`](../DATA/snake-sine-plane.lua) —
+  sinusoidal snake maneuver, full MCP markup example
+- [`wipe-passed-waypoints.lua`](../DATA/wipe-passed-waypoints.lua) —
+  background script, no mission commands
 - [ArduPilot Lua scripting docs](https://ardupilot.org/plane/docs/common-lua-scripts.html)
+- [ArduPilot `NAV_SCRIPT_TIME` reference](https://ardupilot.org/plane/docs/common-mavlink-mission-command-messages-mav_cmd.html)
