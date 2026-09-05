@@ -850,6 +850,14 @@ class MissionPageMixin:
             self.plot_canvas.configure(height=viewport_h)
         if hasattr(self, "angle_canvas") and self.angle_canvas.winfo_exists():
             self.angle_canvas.configure(height=viewport_h)
+        if hasattr(self, "_populated_map_box") and self._populated_map_box.winfo_exists():
+            self._populated_map_box.configure(height=viewport_h)
+        if hasattr(self, "_optimize_map_box") and self._optimize_map_box.winfo_exists():
+            self._optimize_map_box.configure(height=viewport_h)
+        if hasattr(self, "_optimize_report_box") and self._optimize_report_box.winfo_exists():
+            self._optimize_report_box.configure(height=viewport_h)
+        if hasattr(self, "_populated_report_box") and self._populated_report_box.winfo_exists():
+            self._populated_report_box.configure(height=viewport_h)
 
 
     def _on_map_hover(self, event):
