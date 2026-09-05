@@ -10,10 +10,68 @@ version.py + changelog.py — обидва були зовсім маленьк�
 
 from __future__ import annotations
 
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 AUTHOR = "Sergey Gorbachevsky"
 
 ENTRIES = [
+    {
+        "version": "1.0.6",
+        "date": "2026-09-03",
+        "uk": (
+            "Нова вкладка «Обліт НП» на сторінці «Аналіз» — перевірка "
+            "маршруту на близькість до населених пунктів. Запитує реальні "
+            "координати сіл/міст поблизу маршруту (Overpass API, OpenStreetMap), "
+            "рахує мінімальну відстань від кожного відрізка маршруту до "
+            "найближчого населеного пункту (не тільки від самих точок — і від "
+            "ліній між ними), і позначає порушення заданого порогу (за "
+            "замовчуванням 1 км, редагується).\n\n"
+            "Результат — карта маршруту з кольоровими позначками (червоний — "
+            "порушення, жовтий — близько, зелений — безпечно) і таблиця "
+            "порушень з точними відстанями, номерами відрізків та назвами "
+            "населених пунктів. Для довгих маршрутів (сотні кілометрів) "
+            "автоматично приховує на карті безпечно далекі позначки, лишаючи "
+            "лише релевантні — щоб карта не перетворювалась на суцільну пляму "
+            "з тисяч точок.\n\n"
+            "Важливе технічне застереження, зазначене прямо у звіті: "
+            "перевірка використовує координати ЦЕНТРУ населеного пункту з "
+            "OpenStreetMap, не межі забудови — для малих сіл похибка мінімальна, "
+            "для великих міст реальна відстань до найближчого будинку може бути "
+            "меншою за розраховану.\n\n"
+            "Виправлено помилку HTTP 406 при зверненні до Overpass API "
+            "(сервер посилив захист від автоматичних запитів — додано коректні "
+            "заголовки) та додано автоматичний перехід на резервний сервер, "
+            "якщо основний тимчасово недоступний.\n\n"
+            "Карта тепер вписується у висоту видимого вікна (раніше на дуже "
+            "широких моніторах могла розтягуватись на весь екран без потреби)."
+        ),
+        "en": (
+            "New \"Settlements\" tab on the \"Analysis\" page — checks the "
+            "route for proximity to populated areas. Queries real coordinates "
+            "of villages/towns near the route (Overpass API, OpenStreetMap), "
+            "computes the minimum distance from each route leg to the nearest "
+            "settlement (not just from the waypoints themselves — from the "
+            "lines between them too), and flags violations of a configurable "
+            "threshold (1 km by default).\n\n"
+            "Results: a route map with color-coded markers (red — violation, "
+            "yellow — close, green — safe) and a violations table with exact "
+            "distances, leg numbers, and settlement names. For long routes "
+            "(hundreds of kilometers), safely-distant markers are automatically "
+            "hidden from the map, keeping only the relevant ones — so the map "
+            "doesn't turn into a solid blob of thousands of dots.\n\n"
+            "Important caveat, stated directly in the report: the check uses "
+            "the settlement's CENTER coordinate from OpenStreetMap, not its "
+            "built-up boundary — negligible error for small villages, but for "
+            "large cities the real distance to the nearest building may be "
+            "smaller than calculated.\n\n"
+            "Fixed an HTTP 406 error when querying the Overpass API (the "
+            "server tightened its anti-bot protection — proper headers added) "
+            "and added automatic fallback to a mirror server if the primary "
+            "one is temporarily unavailable.\n\n"
+            "The map now fits within the visible window height (previously "
+            "could stretch across the entire screen on very wide monitors "
+            "without need)."
+        ),
+    },
     {
         "version": "1.0.5",
         "date": "2026-09-01",
