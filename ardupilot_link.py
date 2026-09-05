@@ -246,14 +246,19 @@ class ArduPilotLinkMixin:
             return
 
         self._flight_conn = conn
-        # AUTO підставляє в поля реально знайдені порт/швидкість -- щоб
-        # було видно, що саме знайшлося, і щоб Disconnect/повторний Connect
-        # надалі працювали з конкретним портом, а не знову шукали
+        # AUTO підставляє в поля реально знайдені порт/швидкість
         self.port_var.set(port)
         self.baud_var.set(str(baud))
         self.connect_btn.configure(text=i18n.t("btn_disconnect"), state="normal", **self._connect_active_style)
         self.connect_btn.update_idletasks()
         self.status_var.set(i18n.t("status_connected_fmt", port=port, baud=baud))
+
+        # --- перехоплення STATUSTEXT при підключенні ---
+        # Кастомні прошивки (напр. FP v9.0) надсилають свій рядок версії
+        # як STATUSTEXT одразу після підключення (Mission Planner показує
+        # його в заголовку вікна). Слухаємо кілька секунд і зберігаємо
+        # першу змістовну строку -- вона потім з'являється в звіті Info.
+        self._startup_statustext = None
         # показуємо кнопки Info/Read/Write/Files (у цьому порядку, зліва
         # направо всередині правої підгрупи)
         if hasattr(self, "_ardu_read_btn"):
@@ -273,6 +278,9 @@ class ArduPilotLinkMixin:
             except Exception:
                 pass
             self._flight_conn = None
+            # зупиняємо HUD-поток якщо діалог Info ще відкритий
+            if self._hud_state.get("active"):
+                self._stop_hud_telemetry()
         self.connect_btn.configure(text=i18n.t("btn_connect"), state="normal", **self._connect_idle_style)
         self.status_var.set("")
         # ховаємо кнопки Info/Read/Write/Files
@@ -304,6 +312,7 @@ class ArduPilotLinkMixin:
         report = None
         error = None
 
+
         def set_progress(text):
             # thread-safe оновлення статус-рядка з фонового потоку --
             # Tkinter-змінні не можна чіпати напряму з не-головного
@@ -313,6 +322,30 @@ class ArduPilotLinkMixin:
 
         try:
             ts, tc = conn.target_system, conn.target_component
+
+            # --- banner-рядок версії (STATUSTEXT від send_banner() в ArduPilot) ---
+            # ArduPilot надсилає STATUSTEXT з рядком версії ("ArduPlane v4.4.4 FP v9.0")
+            # у відповідь на PARAM_REQUEST_LIST -- саме так Mission Planner
+            # його отримує. Якщо буфер conn.messages вже має цей рядок (від
+            # попереднього підключення) -- використовуємо одразу; якщо ні --
+            # запитуємо PARAM_REQUEST_LIST і 0.5с чекаємо відповідь.
+            if not self._startup_statustext:
+                import time as _time
+                import re as _re
+                conn.mav.param_request_list_send(ts, tc)
+                deadline = _time.time() + 1.5
+                while _time.time() < deadline:
+                    bmsg = conn.recv_match(type="STATUSTEXT", blocking=True, timeout=0.2)
+                    if bmsg is None:
+                        continue
+                    text = getattr(bmsg, "text", "").strip().rstrip("\x00")
+                    if not text:
+                        continue
+                    # беремо лише рядок з версією -- пропускаємо службові
+                    # повідомлення типу "EKF3 waiting for GPS config data"
+                    if _re.search(r'Ardu(?:Plane|Copter|Rover|Sub|Tracker)\s+V?\d+\.\d+', text, _re.IGNORECASE):
+                        self._startup_statustext = text
+                        break
 
             # --- AUTOPILOT_VERSION: версія прошивки, плата, vendor/product, UID ---
             set_progress(i18n.t("status_info_step_version"))
@@ -347,6 +380,13 @@ class ArduPilotLinkMixin:
                 0, 1, 0, 0, 0, 0, 0,
             )
             storage = conn.recv_match(type="STORAGE_INFORMATION", blocking=True, timeout=5)
+
+            # --- MEMINFO: вільна RAM (ChibiOS/ArduPilot-специфічне повідомлення) ---
+            conn.mav.command_long_send(
+                ts, tc, mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
+                mavutil.mavlink.MAVLINK_MSG_ID_MEMINFO, 0, 0, 0, 0, 0, 0,
+            )
+            meminfo = conn.recv_match(type="MEMINFO", blocking=True, timeout=3)
 
             # --- список файлів на SD (MAVLink FTP, вбудований в pymavlink) ---
             files = None
@@ -419,7 +459,7 @@ class ArduPilotLinkMixin:
             )
             report = self._format_flight_info(
                 conn, ver, sys_status, scaled_pressure, storage, files, ftp_error,
-                scripted_commands, scanned_lua_files, self._scripts_meta,
+                scripted_commands, scanned_lua_files, self._scripts_meta, meminfo,
             )
         except Exception as e:
             error = str(e)
@@ -435,9 +475,10 @@ class ArduPilotLinkMixin:
         patch = (raw >> 8) & 0xFF
         fw_type = raw & 0xFF
         type_names = {
-            0: "dev", 64: "alpha", 128: "beta", 192: "rc", 255: "official",
+            0: "dev", 1: "alpha", 2: "beta", 3: "rc",
+            64: "alpha", 128: "beta", 192: "rc", 255: "official",
         }
-        type_name = type_names.get(fw_type, f"0x{fw_type:02x}")
+        type_name = type_names.get(fw_type, f"custom({fw_type})")
         return f"{major}.{minor}.{patch} ({type_name})"
 
 
@@ -464,7 +505,7 @@ class ArduPilotLinkMixin:
 
     def _format_flight_info(
         self, conn, ver, sys_status, scaled_pressure=None, storage=None, files=None, ftp_error=None,
-        scripted_commands=None, scanned_lua_files=None, scripts_meta=None,
+        scripted_commands=None, scanned_lua_files=None, scripts_meta=None, meminfo=None,
     ) -> str:
         from pymavlink import mavutil
         lines = []
@@ -506,54 +547,49 @@ class ArduPilotLinkMixin:
         # --- AUTOPILOT_VERSION ---
         lines.append(i18n.t("info_section_firmware"))
         lines.append("-" * 44)
-        if ver is None:
-            lines.append(i18n.t("info_no_response"))
-        else:
-            lines.append(i18n.t("info_fw_version_fmt", version=self._decode_firmware_version(ver.flight_sw_version)))
-            if ver.board_version:
-                lines.append(i18n.t("info_board_version_fmt", version=ver.board_version))
-            if ver.vendor_id or ver.product_id:
-                lines.append(i18n.t("info_vendor_product_fmt", vendor=ver.vendor_id, product=ver.product_id))
-            uid = ver.uid
-            if uid:
-                lines.append(i18n.t("info_uid_fmt", uid=f"{uid:016x}"))
+
+        startup_text = getattr(self, "_startup_statustext", None)
+        if ver is not None:
             fc_hash = bytes(ver.flight_custom_version).rstrip(b"\x00")
-            if fc_hash:
-                # flight_custom_version -- 8 байт, де ArduPilot зберігає
-                # git-хеш САМЕ ЯК ASCII-символи (не як бінарне число).
-                # .hex() давало б "3364623462633765" (hex-дамп байтів) --
-                # незрозуміло людині. .decode("ascii") дає "3db4bc7e" --
-                # справжній git short hash, по якому можна знайти коміт.
+            try:
+                hash_str = fc_hash.decode("ascii").strip() if fc_hash else None
+            except UnicodeDecodeError:
+                hash_str = fc_hash.hex() if fc_hash else None
+
+            base = startup_text or self._decode_firmware_version(ver.flight_sw_version)
+            ver_line = f"{base} ({hash_str})" if hash_str and hash_str not in base else base
+            lines.append(i18n.t("info_startup_version_fmt", text=ver_line))
+
+            if ver.board_version:
                 try:
-                    hash_str = fc_hash.decode("ascii").strip()
-                except UnicodeDecodeError:
-                    hash_str = fc_hash.hex()  # запасний варіант, якщо раптом не ASCII
-                lines.append(i18n.t("info_git_hash_fmt", hash=hash_str))
-
-            # --- Middleware і OS -- виробник БПЛА міг записати сюди
-            # власний номер версії (та сама 8-байтна ASCII-структура що й
-            # flight_custom_version). Стокова ArduPilot записує git-хеш
-            # ChibiOS або нулі -- усе інше майже напевно кастомна мітка.
-            def _try_decode_custom(raw_bytes):
-                data = bytes(raw_bytes).rstrip(b"\x00")
-                if not data:
-                    return None
+                    from board_ids import lookup_board_name
+                    board_name = lookup_board_name(ver.board_version)
+                except ImportError:
+                    board_name = None
+                if board_name:
+                    lines.append(i18n.t("info_board_name_fmt",
+                                        name=board_name, version=ver.board_version))
+                else:
+                    lines.append(i18n.t("info_board_version_fmt", version=ver.board_version))
+            if ver.vendor_id or ver.product_id:
                 try:
-                    return data.decode("ascii").strip()
-                except UnicodeDecodeError:
-                    return data.hex()
-
-            mw_ver = ver.middleware_sw_version
-            if mw_ver:
-                lines.append(i18n.t("info_middleware_version_fmt", version=mw_ver))
-
-            mw_hash = _try_decode_custom(ver.middleware_custom_version)
-            if mw_hash:
-                lines.append(i18n.t("info_middleware_hash_fmt", hash=mw_hash))
-
-            os_hash = _try_decode_custom(ver.os_custom_version)
-            if os_hash:
-                lines.append(i18n.t("info_os_hash_fmt", hash=os_hash))
+                    from board_ids import lookup_usb_name
+                    usb_vendor, usb_product = lookup_usb_name(ver.vendor_id, ver.product_id)
+                except ImportError:
+                    usb_vendor, usb_product = None, None
+                if usb_product and usb_vendor:
+                    lines.append(i18n.t("info_usb_product_fmt",
+                                        vendor=usb_vendor, product=usb_product))
+                elif usb_product:
+                    lines.append(i18n.t("info_usb_product_only_fmt", product=usb_product))
+                elif usb_vendor:
+                    lines.append(i18n.t("info_usb_vendor_only_fmt", vendor=usb_vendor))
+                else:
+                    # board_ids.py відсутній -- показуємо сирі числа
+                    lines.append(i18n.t("info_vendor_product_fmt",
+                                        vendor=ver.vendor_id, product=ver.product_id))
+        else:
+            lines.append(i18n.t("info_no_response"))
 
         lines.append("")
 
@@ -615,7 +651,13 @@ class ArduPilotLinkMixin:
                     press=scaled_pressure.press_abs,
                     temp=temp_c,
                 ))
-                lines.append("")
+
+            # --- RAM: вільна пам'ять (MEMINFO, ChibiOS/ArduPilot) ---
+            if meminfo is not None:
+                free_kb = meminfo.freemem / 1024.0
+                lines.append(i18n.t("info_ram_free_fmt", kb=free_kb))
+
+            lines.append("")
 
             na = i18n.t("value_na")
             voltage_s = f"{sys_status.voltage_battery / 1000.0:.2f}" if sys_status.voltage_battery not in (0, 65535) else na
@@ -745,6 +787,37 @@ class ArduPilotLinkMixin:
             lines.append(i18n.t("info_no_scripted_commands"))
 
         return "\n".join(lines)
+
+
+    def _read_startup_statustext(self, conn) -> str | None:
+        """Читає STATUSTEXT з буферів pymavlink (post_message зберігає
+        кожне вхідне повідомлення автоматично, незалежно від recv_match).
+        Перевіряємо обидва словники -- глобальний conn.messages і
+        sysid_state[sysid].messages -- бо pymavlink пише в обидва."""
+        import re as _re
+
+        def _extract(msg) -> str | None:
+            if msg is None:
+                return None
+            text = getattr(msg, "text", "").strip().rstrip("\x00")
+            # показуємо будь-який непорожній STATUSTEXT -- навіть якщо
+            # не виглядає як версія, краще показати зайве ніж пропустити
+            return text if text else None
+
+        # 1. глобальний словник conn.messages
+        text = _extract(conn.messages.get("STATUSTEXT"))
+        if text:
+            return text
+
+        # 2. per-sysid словник
+        sysid = getattr(conn, "target_system", None)
+        state = conn.sysid_state.get(sysid) if sysid else None
+        if state is not None:
+            text = _extract(state.messages.get("STATUSTEXT"))
+            if text:
+                return text
+
+        return None
 
 
     def _on_flight_info_ready(self, report: str | None, error: str | None):
@@ -960,12 +1033,17 @@ class ArduPilotLinkMixin:
 
     def _hud_receive_loop(self):
         """Фоновий потік: отримує ATTITUDE і VFR_HUD і кладе у self._hud_state.
-        Завершується, коли hud_state["active"] стає False (діалог закрито)."""
+        Завершується, коли hud_state["active"] стає False (діалог закрито)
+        або при будь-якій помилці порту (відключення під час відкритого HUD)."""
         conn = self._flight_conn
         while self._hud_state.get("active") and conn is not None:
-            msg = conn.recv_match(
-                type=["ATTITUDE", "VFR_HUD"], blocking=True, timeout=0.3,
-            )
+            try:
+                msg = conn.recv_match(
+                    type=["ATTITUDE", "VFR_HUD"], blocking=True, timeout=0.3,
+                )
+            except Exception:
+                # порт закрито (відключення) -- тихо завершуємо потік
+                break
             if msg is None:
                 continue
             t = msg.get_type()
@@ -1450,14 +1528,42 @@ class ArduPilotLinkMixin:
         ("BRD_SERIAL_NUM",  "Серійний номер плати",           "Board serial number"),
     ]
 
+    _KEY_PARAMS_SUB = [
+        # --- Батарея ---
+        ("BATT_LOW_VOLT",   "Низький заряд (В)",              "Low battery voltage (V)"),
+        ("BATT_CRT_VOLT",   "Критичний заряд (В)",            "Critical battery voltage (V)"),
+        ("BATT_FS_LOW_ACT", "Дія при низькому заряді",        "Low battery action"),
+        # --- Специфічні для підводного апарату failsafe (ArduSub) ---
+        ("FS_GCS_ENABLE",   "Failsafe GCS (втрата зв'язку)",  "GCS failsafe (lost link)"),
+        ("FS_LEAK_ENABLE",  "Failsafe при протіканні",        "Leak failsafe"),
+        ("FS_PRESS_ENABLE", "Failsafe тиску корпусу",         "Internal pressure failsafe"),
+        ("FS_PRESS_MAX",    "Макс. тиск корпусу (Па)",        "Max internal pressure (Pa)"),
+        ("FS_TEMP_ENABLE",  "Failsafe температури корпусу",   "Internal temperature failsafe"),
+        ("FS_TEMP_MAX",     "Макс. температура корпусу (\u00b0C)", "Max internal temperature (C)"),
+        # --- Ідентифікація ---
+        ("SYSID_THISMAV",   "MAVLink System ID борта",        "MAVLink System ID"),
+        ("BRD_SERIAL_NUM",  "Серійний номер плати",           "Board serial number"),
+    ]
+
     # MAV_TYPE значення, що відповідають кожному типу апарату
     _PLANE_TYPES = frozenset([1, 19, 20, 21, 22, 23, 24, 25])   # Fixed-wing + VTOL
     _COPTER_TYPES = frozenset([2, 13, 14, 15, 16, 29, 35])       # Quad/Hexa/Octo/Tri/etc
     _ROVER_TYPES = frozenset([10, 11])                            # Rover/Boat
+    _SUB_TYPES = frozenset([12])                                  # MAV_TYPE_SUBMARINE
 
     def _key_params_for_vehicle(self) -> tuple[list, str]:
         """Повертає (список_параметрів, назва_типу) залежно від MAV_TYPE
-        підключеного зараз апарата. Той самий sysid_state, що й у Info."""
+        підключеного зараз апарата. Той самий sysid_state, що й у Info.
+
+        4 групи (узгоджено з Mission Planner Install Firmware і з
+        aircraft_profiles.DRONE_TYPES -- та сама термінологія скрізь
+        у проєкті): Plane, Copter, Rover, Sub.
+
+        Раніше НЕВІДОМИЙ тип мовчки повертав параметри ЛІТАКА,
+        підписані як "Невідомий тип" -- оманливо (виглядало б, ніби це
+        справжні параметри якогось конкретного апарата, хоча насправді
+        це не мало жодного стосунку до підключеного борту). Тепер --
+        чесно порожній список, той самий підпис."""
         from pymavlink import mavutil
         conn = self._flight_conn
         sysid = getattr(conn, "target_system", None)
@@ -1470,9 +1576,11 @@ class ArduPilotLinkMixin:
             return self._KEY_PARAMS_COPTER, i18n.t("vehicle_type_copter")
         if mav_type in self._ROVER_TYPES:
             return self._KEY_PARAMS_ROVER, i18n.t("vehicle_type_rover")
-        # невідомий тип -- показуємо загальний мінімум (Plane як базовий,
-        # бо Mission Analyzer орієнтований на фіксоване крило)
-        return self._KEY_PARAMS_PLANE, i18n.t("vehicle_type_unknown")
+        if mav_type in self._SUB_TYPES:
+            return self._KEY_PARAMS_SUB, i18n.t("vehicle_type_sub")
+        # СПРАВЖНІЙ невідомий тип (жоден з 4 груп) -- чесно порожній
+        # список, а не мовчазна підміна параметрами літака
+        return [], i18n.t("vehicle_type_unknown")
 
     def _show_key_params(self):
         if self._flight_conn is None:
@@ -1563,6 +1671,12 @@ class ArduPilotLinkMixin:
         desc_key = "uk" if i18n.get_lang() == "uk" else "en"
         header = title
         lines = [header, "-" * 44, ""]
+        if not results:
+            # порожній список -- або тип апарату не входить у жодну з 4
+            # підтримуваних груп (Plane/Copter/Rover/Sub), або сама
+            # група ще не має визначених ключових параметрів. Явне
+            # повідомлення замість порожнього діалогу без пояснення.
+            lines.append(i18n.t("msg_no_key_params_for_vehicle"))
         for name, desc_uk, desc_en, value in results:
             desc = desc_uk if desc_key == "uk" else desc_en
             val_str = f"{value:.6g}" if value is not None else i18n.t("param_no_response")
