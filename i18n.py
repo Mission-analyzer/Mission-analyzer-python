@@ -210,10 +210,6 @@ _TR: dict[str, dict[str, str]] = {
         "uk": "Готово: {n} точок маршруту, {m} критичних відміток",
         "en": "Done: {n} route points, {m} critical flags",
     },
-    "status_loaded_fmt": {
-        "uk": "Завантажено: {n} точок маршруту",
-        "en": "Loaded: {n} route points",
-    },
     "msg_no_data_title": {"uk": "Немає даних", "en": "No data"},
     "msg_no_data_body": {"uk": "Спочатку виконай аналіз", "en": "Run analysis first"},
     "msg_saved_title": {"uk": "Готово", "en": "Done"},
@@ -421,6 +417,179 @@ _TR: dict[str, dict[str, str]] = {
     "tab_takeoff": {"uk": "Зліт", "en": "Takeoff"},
     "tab_route": {"uk": "Маршрут", "en": "Route"},
     "tab_landing_phase": {"uk": "Посадка", "en": "Landing"},
+    "tab_populated_areas": {"uk": "Обліт НП", "en": "Settlements"},
+    "tab_route_optimization": {"uk": "Оптимізація", "en": "Optimization"},
+
+    # --- Профілі літака (aircraft_profiles.py) ---
+    "box_aircraft_profiles": {"uk": "Профілі літака", "en": "Aircraft profiles"},
+    "lbl_profile_name": {"uk": "Назва профілю:", "en": "Profile name:"},
+    "lbl_drone_type": {"uk": "Тип дрона:", "en": "Drone type:"},
+    "lbl_engine_type": {"uk": "Тип двигуна:", "en": "Engine type:"},
+    "lbl_airspeed_min": {"uk": "Мін. швидкість:", "en": "Min speed:"},
+    "lbl_airspeed_max": {"uk": "Макс. швидкість:", "en": "Max speed:"},
+    "lbl_roll_limit": {"uk": "Обмеження крену:", "en": "Roll limit:"},
+    "lbl_pitch_limit_max": {"uk": "Макс. кут набору:", "en": "Max climb angle:"},
+    "lbl_pitch_limit_min": {"uk": "Мін. кут зниження:", "en": "Min descent angle:"},
+    "lbl_deg": {"uk": "°", "en": "°"},
+    "lbl_ms": {"uk": "м/с", "en": "m/s"},
+
+    # тип дрона -- варіанти випадаючого списку (DRONE_TYPES у aircraft_profiles.py)
+    "drone_type_plane": {"uk": "Літак", "en": "Plane"},
+    "drone_type_copter": {"uk": "Коптер", "en": "Copter"},
+    "drone_type_rover": {"uk": "Ровер", "en": "Rover"},
+    "drone_type_sub": {"uk": "Підводний апарат", "en": "Sub"},
+
+    # тип двигуна -- варіанти випадаючого списку (ENGINE_TYPES).
+    # "ДВЗ" -- стандартна українська абревіатура "двигун внутрішнього
+    # згоряння" (не калька з англійської ICE) -- саме так це має
+    # називатись в українському інтерфейсі.
+    "engine_type_ice": {"uk": "ДВЗ (бензиновий)", "en": "ICE (gasoline)"},
+    "engine_type_turbine": {"uk": "Турбіна", "en": "Turbine"},
+
+    "btn_save_profile": {"uk": "Зберегти", "en": "Save"},
+    "btn_set_current_profile": {"uk": "Встановити поточним", "en": "Set as current"},
+    "btn_delete_profile": {"uk": "Видалити профіль", "en": "Delete profile"},
+    "btn_new_profile": {"uk": "Новий профіль", "en": "New profile"},
+    "lbl_current_profile": {"uk": "Поточний профіль:", "en": "Current profile:"},
+    "msg_no_profiles": {"uk": "Немає жодного профілю -- створіть перший.", "en": "No profiles yet -- create one."},
+    "msg_type_fields_not_implemented": {
+        "uk": "Поля повного профілю для цього типу ЛА ще не реалізовані.",
+        "en": "Full profile fields for this drone type are not implemented yet.",
+    },
+    "msg_profile_name_required": {"uk": "Введіть назву профілю.", "en": "Enter a profile name."},
+    "msg_confirm_delete_profile_fmt": {
+        "uk": "Видалити профіль «{name}»?",
+        "en": "Delete profile \"{name}\"?",
+    },
+    "box_optimization_map": {"uk": "Карта: було / стало", "en": "Map: before / after"},
+    "box_optimization_report": {"uk": "Результати оптимізації", "en": "Optimization results"},
+    "btn_optimize_route": {"uk": "Оптимізувати маршрут", "en": "Optimize route"},
+    "btn_save_optimized_mission": {"uk": "Зберегти оптимізовану місію", "en": "Save optimized mission"},
+    "dlg_save_optimized_mission_title": {"uk": "Зберегти оптимізовану місію", "en": "Save optimized mission"},
+    "msg_no_optimization_result": {
+        "uk": "Спочатку запустіть оптимізацію маршруту.",
+        "en": "Run route optimization first.",
+    },
+    "msg_no_terrain_for_save": {
+        "uk": "Дані рельєфу (SRTM) недоступні -- висоту обхідних точок "
+              "неможливо коректно розрахувати. Перевірте наявність .hgt "
+              "файлів для цього регіону.",
+        "en": "Terrain data (SRTM) is unavailable -- cannot correctly "
+              "compute detour waypoint altitude. Check .hgt files for "
+              "this region.",
+    },
+    "msg_no_terrain_for_leg_fmt": {
+        "uk": "Немає даних рельєфу для розрахунку висоти обходу на "
+              "одному з ребер (SRTM недоступний для обох кінців ребра).",
+        "en": "No terrain data to compute detour altitude for one of the "
+              "legs (SRTM unavailable for both leg endpoints).",
+    },
+    "msg_save_failed_fmt": {"uk": "Не вдалося зберегти файл: {error}", "en": "Failed to save file: {error}"},
+    "msg_save_success_fmt": {
+        "uk": "Місію збережено: {n} точок.\n{path}",
+        "en": "Mission saved: {n} points.\n{path}",
+    },
+    "lbl_tank_capacity": {"uk": "Ємність бака:", "en": "Tank capacity:"},
+    "lbl_liters": {"uk": "л", "en": "L"},
+    "lbl_cruise_consumption": {"uk": "Витрата (крейсер):", "en": "Consumption (cruise):"},
+    "lbl_liters_per_hour": {"uk": "л/год", "en": "L/h"},
+    "lbl_cruise_speed": {"uk": "Швидкість (крейсер):", "en": "Speed (cruise):"},
+    "lbl_kmh": {"uk": "км/год", "en": "km/h"},
+    "lbl_exclude_landing_legs": {"uk": "Ребер зони посадки (не оптимізувати):", "en": "Landing-zone legs (skip optimization):"},
+    "msg_invalid_optimization_input_body": {
+        "uk": "Перевірте введені значення -- усі поля мають бути додатними числами.",
+        "en": "Check the entered values -- all fields must be positive numbers.",
+    },
+    "status_optimizing_route": {"uk": "Оптимізація маршруту...", "en": "Optimizing route..."},
+    "status_optimizing_leg_fmt": {
+        "uk": "Обробка ребра {done}/{total}...",
+        "en": "Processing leg {done}/{total}...",
+    },
+    "status_optimization_done_fmt": {
+        "uk": "Готово: {legs} ребер оброблено, +{added:.2f}км до маршруту",
+        "en": "Done: {legs} legs processed, +{added:.2f}km added to route",
+    },
+    "opt_distance_before_fmt": {"uk": "Довжина маршруту (було): {km:.2f}км", "en": "Route length (before): {km:.2f}km"},
+    "opt_distance_after_fmt": {"uk": "Довжина маршруту (стало): {km:.2f}км", "en": "Route length (after): {km:.2f}km"},
+    "opt_distance_added_fmt": {"uk": "Додано: {km:.2f}км", "en": "Added: {km:.2f}km"},
+    "opt_waypoints_fmt": {"uk": "Точок маршруту: {n} (ліміт {limit})", "en": "Route waypoints: {n} (limit {limit})"},
+    "opt_waypoint_limit_exceeded": {
+        "uk": "⚠ ЛІМІТ ПЕРЕВИЩЕНО -- потрібно зменшити кількість точок",
+        "en": "⚠ LIMIT EXCEEDED -- need to reduce number of waypoints",
+    },
+    "opt_fuel_trip_fmt": {"uk": "Паливо на маршрут: {l:.2f}л", "en": "Trip fuel: {l:.2f}L"},
+    "opt_fuel_reserve_fmt": {"uk": "Резерв (ICAO 5%): {l:.2f}л", "en": "Reserve (ICAO 5%): {l:.2f}L"},
+    "opt_fuel_required_fmt": {"uk": "Всього потрібно: {l:.2f}л", "en": "Total required: {l:.2f}L"},
+    "opt_fuel_tank_fmt": {"uk": "Ємність бака: {l:.2f}л", "en": "Tank capacity: {l:.2f}L"},
+    "opt_fuel_ok": {"uk": "✓ Вкладається, запас {margin:.2f}л", "en": "✓ Fits, margin {margin:.2f}L"},
+    "opt_fuel_deficit": {"uk": "✗ НЕ вкладається, бракує {margin:.2f}л", "en": "✗ Does NOT fit, short by {margin:.2f}L"},
+    "opt_turn_radius_fmt": {
+        "uk": "Мін. радіус повороту: {r:.0f}м (поріг обходу: {threshold:.0f}м)",
+        "en": "Min turn radius: {r:.0f}m (detour threshold: {threshold:.0f}m)",
+    },
+    "opt_turn_ok": {"uk": "✓ Літак може виконати такий поворот, запас {margin:.0f}м", "en": "✓ Aircraft can fly this turn, margin {margin:.0f}m"},
+    "opt_turn_deficit": {
+        "uk": "✗ Радіус повороту ЗАМАЛИЙ для порогу обходу, бракує {margin:.0f}м -- реальна траєкторія зріже кут",
+        "en": "✗ Turn radius TOO TIGHT for the detour threshold, short by {margin:.0f}m -- actual flight path will cut the corner",
+    },
+    "opt_failed_legs_header_fmt": {
+        "uk": "Ребра, які НЕ вдалось обійти автоматично ({n}):",
+        "en": "Legs that could NOT be auto-detoured ({n}):",
+    },
+    "opt_leg_failed_marker": {"uk": "не вдалось обійти", "en": "could not detour"},
+    "opt_before_after_header": {
+        "uk": "Відстань до НП: було / стало",
+        "en": "Distance to settlement: before / after",
+    },
+    "opt_no_obstacles_considered": {
+        "uk": "Жодного населеного пункту поруч не знайдено -- увесь маршрут безпечний.",
+        "en": "No settlements found nearby -- the entire route is clear.",
+    },
+    "opt_col_before": {"uk": "Було", "en": "Before"},
+    "opt_col_after": {"uk": "Стало", "en": "After"},
+    "lbl_settlement_threshold": {"uk": "Мінімальна відстань до НП:", "en": "Min distance to settlements:"},
+    "lbl_km": {"uk": "км", "en": "km"},
+    "btn_check_settlements": {"uk": "Перевірити обліт НП", "en": "Check settlement clearance"},
+    "box_populated_areas_map": {"uk": "Карта маршруту й населених пунктів", "en": "Route & settlements map"},
+    "box_settlement_violations": {"uk": "Порушення мінімальної відстані", "en": "Minimum distance violations"},
+    "status_fetching_settlements": {"uk": "Пошук населених пунктів (Overpass API)...", "en": "Fetching settlements (Overpass API)..."},
+    "status_checking_leg_fmt": {"uk": "Перевірка ребра {done}/{total}...", "en": "Checking leg {done}/{total}..."},
+    "status_settlements_error_fmt": {"uk": "Помилка: {error}", "en": "Error: {error}"},
+    "status_settlements_found_fmt": {
+        "uk": "Знайдено {total} населених пунктів поблизу, {violations} порушень",
+        "en": "Found {total} nearby settlements, {violations} violations",
+    },
+    "msg_no_settlement_violations": {
+        "uk": "Порушень не знайдено -- всі населені пункти на безпечній відстані.",
+        "en": "No violations found -- all settlements are at a safe distance.",
+    },
+    "settlement_col_num": {"uk": "№", "en": "#"},
+    "settlement_col_leg": {"uk": "Ребро", "en": "Leg"},
+    "settlement_col_side": {"uk": "Бік", "en": "Side"},
+    "side_left": {"uk": "Л", "en": "L"},
+    "side_right": {"uk": "П", "en": "R"},
+    "settlement_col_points": {"uk": "Точки", "en": "Points"},
+    "settlement_col_name": {"uk": "Назва", "en": "Name"},
+    "settlement_col_place": {"uk": "Тип", "en": "Type"},
+    "settlement_col_population": {"uk": "Населення", "en": "Population"},
+    "settlement_col_distance": {"uk": "Відстань", "en": "Distance"},
+    "msg_invalid_threshold_body": {
+        "uk": "Введіть коректне додатне число для мінімальної відстані (км).",
+        "en": "Enter a valid positive number for the minimum distance (km).",
+    },
+    "msg_huge_area_warning_fmt": {
+        "uk": "Маршрут охоплює {span:.0f} км. Пошук населених пунктів на "
+              "такій площі поверне багато результатів і триватиме довше "
+              "звичайного. Продовжити?",
+        "en": "The route spans {span:.0f} km. Searching settlements over "
+              "this area will return many results and take longer than "
+              "usual. Proceed?",
+    },
+    "status_settlements_shown_fmt": {
+        "uk": "На карті показано {shown} з {total} (найближчі до маршруту)",
+        "en": "Showing {shown} of {total} on the map (closest to the route)",
+    },
+    "settlement_pop_suffix_fmt": {"uk": ", {pop} ос.", "en": ", pop. {pop}"},
     "hint_bad_speed": {"uk": "швидкість?", "en": "speed?"},
 
     # --- сторінка "Конфігурація" ---
@@ -596,22 +765,29 @@ _TR: dict[str, dict[str, str]] = {
         "en": "{autopilot} / {vtype}",
     },
     "info_section_firmware": {"uk": "Прошивка та плата", "en": "Firmware & board"},
+    "info_startup_version_fmt": {"uk": "Версія: {text}", "en": "Version: {text}"},
     "info_no_response": {"uk": "Немає відповіді від контролера", "en": "No response from the controller"},
     "info_fw_version_fmt": {"uk": "Версія прошивки: {version}", "en": "Firmware version: {version}"},
     "info_board_version_fmt": {"uk": "Версія плати: {version}", "en": "Board version: {version}"},
+    "info_board_name_fmt": {"uk": "Плата: {name} (ID {version})", "en": "Board: {name} (ID {version})"},
     "info_vendor_product_fmt": {
         "uk": "Vendor ID: {vendor}   Product ID: {product}",
         "en": "Vendor ID: {vendor}   Product ID: {product}",
     },
+    "info_usb_product_fmt":      {"uk": "{vendor} / {product}", "en": "{vendor} / {product}"},
+    "info_usb_product_only_fmt": {"uk": "{product}", "en": "{product}"},
+    "info_usb_vendor_only_fmt":  {"uk": "{vendor}", "en": "{vendor}"},
     "info_uid_fmt": {"uk": "UID: {uid}", "en": "UID: {uid}"},
     "info_git_hash_fmt": {"uk": "Git-хеш прошивки: {hash}", "en": "Firmware git hash: {hash}"},
     "info_middleware_version_fmt": {"uk": "Версія middleware: {version}", "en": "Middleware version: {version}"},
-    "info_middleware_hash_fmt": {"uk": "Git-хеш middleware: {hash}", "en": "Middleware git hash: {hash}"},
-    "info_os_hash_fmt": {"uk": "Git-хеш OS: {hash}", "en": "OS git hash: {hash}"},
+    "info_middleware_hash_fmt": {"uk": "Middleware: {hash}", "en": "Middleware: {hash}"},
+    "info_os_hash_fmt": {"uk": "OS / виробник: {hash}", "en": "OS / vendor: {hash}"},
+    "info_os_version_fmt": {"uk": "Версія OS / виробника: {version}", "en": "OS / vendor version: {version}"},
     "info_section_sensors": {"uk": "Датчики", "en": "Sensors"},
     "info_no_sensors": {"uk": "Дані про датчики відсутні", "en": "No sensor data available"},
     "info_sensor_unhealthy": {"uk": "НЕСПРАВНИЙ", "en": "UNHEALTHY"},
     "info_sensor_absent_hint": {"uk": "(відсутній?)", "en": "(absent?)"},
+    "info_ram_free_fmt": {"uk": "RAM вільна: {kb:.1f} КБ", "en": "Free RAM: {kb:.1f} KB"},
     "info_baro_fmt": {
         "uk": "Барометр: {press:.1f} гПа, температура {temp:.1f}°C",
         "en": "Barometer: {press:.1f} hPa, temperature {temp:.1f}°C",
@@ -701,6 +877,11 @@ _TR: dict[str, dict[str, str]] = {
     "vehicle_type_copter":  {"uk": "Коптер", "en": "Copter"},
     "vehicle_type_rover":   {"uk": "Ровер", "en": "Rover"},
     "vehicle_type_unknown": {"uk": "Невідомий тип", "en": "Unknown type"},
+    "vehicle_type_sub": {"uk": "Підводний апарат", "en": "Sub"},
+    "msg_no_key_params_for_vehicle": {
+        "uk": "Немає визначених ключових параметрів для цього типу апарата.",
+        "en": "No key parameters defined for this vehicle type.",
+    },
     "dlg_params_title": {"uk": "Критичні параметри місії", "en": "Mission-critical parameters"},
     "status_reading_params": {"uk": "Читання параметрів...", "en": "Reading parameters..."},
     "status_reading_param_fmt": {
