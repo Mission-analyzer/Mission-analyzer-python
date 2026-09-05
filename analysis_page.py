@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import threading
+import math
 import urllib.request
 import urllib.parse
 import datetime
@@ -222,7 +223,7 @@ class AnalysisPageMixin:
                 params = self._meteo_render_params[_idx]
                 if params is None:
                     return
-                render_area_map(canvas, *params)
+                render_area_map(canvas, *params, arrow_length=self._wind_arrow_length_px())
 
             canvas.bind("<Configure>", _on_canvas_configure)
             return canvas
@@ -325,6 +326,14 @@ class AnalysisPageMixin:
 
         self._trajectory_map_images = []
         self.trajectory_map_canvas.bind("<Configure>", _on_traj_map_configure)
+
+        # Вітер уздовж маршруту -- ОКРЕМОЇ кнопки більше немає (раніше
+        # тестування показало, що це зайва сутність): дані запитуються
+        # разом з рештою метео за кнопкою "Отримати метео" вгорі
+        # сторінки (_fetch_meteo), карта тут просто оновлюється, коли
+        # результат готовий.
+        self._route_wind_points = []  # [(lat, lon, arrival_dt, wind_dir, wind_spd, err), ...] -- для перемальовки без мережі
+
 
         elev_box = ttk.LabelFrame(trajectory_inner)
         self._reg_i18n(elev_box, "text", "tab_elevation")
@@ -433,6 +442,26 @@ class AnalysisPageMixin:
         # ДВА маршрути одна поверх одної), паливний бюджет ---
         optimize_tab, optimize_inner = make_scroll_tab("tab_route_optimization")
 
+        # Вибір профілю літака -- заповнює поля НИЖЧЕ (крейсерська
+        # швидкість/витрата/крен), ЛИШЕ для цього розрахунку. НЕ змінює
+        # "поточний" профіль у "Конфігурації" -- вибір тут суто локальна
+        # зручність, без побічного ефекту на решту програми. Заодно
+        # користувач, який ніколи не заходив у "Конфігурація", тут
+        # взагалі дізнається, що профілі існують.
+        opt_profile_row = ttk.Frame(optimize_inner)
+        opt_profile_row.pack(fill="x", pady=(0, 6))
+        self._reg_i18n(ttk.Label(opt_profile_row), "text", "lbl_aircraft_profile").pack(side="left", padx=(0, 4))
+        self.opt_profile_var = tk.StringVar(value="")
+        self.opt_profile_box = ttk.Combobox(
+            opt_profile_row, textvariable=self.opt_profile_var, state="readonly", width=22,
+        )
+        self.opt_profile_box.pack(side="left")
+        self.opt_profile_box.bind("<<ComboboxSelected>>", self._on_optimize_profile_selected)
+        # список профілів читається заново ПЕРЕД кожним відкриттям (не
+        # тільки один раз при побудові сторінки) -- профіль міг бути
+        # доданий у "Конфігурації" вже ПІСЛЯ того, як "Аналіз" збудувався
+        self.opt_profile_box.bind("<Button-1>", self._refresh_optimize_profile_list)
+
         opt_controls = ttk.Frame(optimize_inner)
         opt_controls.pack(fill="x", pady=(0, 4))
         self._reg_i18n(ttk.Label(opt_controls), "text", "lbl_tank_capacity").pack(side="left", padx=(0, 4))
@@ -476,6 +505,7 @@ class AnalysisPageMixin:
         # це лише ЗРУЧНА ПІДКАЗКА за замовчуванням, не жорстка
         # прив'язка, для одноразового тесту з іншими цифрами можна
         # просто перезаписати вручну.
+        self._refresh_optimize_profile_list()
         self._prefill_optimization_from_profile()
 
         self.optimize_status_var = tk.StringVar(value="")
@@ -561,12 +591,13 @@ class AnalysisPageMixin:
                     continue
                 (lat, lon, zoom, tiles, image_refs,
                  tx_min, tx_max, ty_min, ty_max,
-                 flight_az, wind_dir, wind_spd) = params
+                 flight_az, wind_dir, wind_spd, wind_time) = params
                 canvas = self._meteo_canvases[idx]
                 render_area_map(
                     canvas, lat, lon, zoom, tiles, image_refs,
                     tx_min, tx_max, ty_min, ty_max,
                     flight_az=flight_az, wind_dir=wind_dir, wind_spd=wind_spd,
+                    wind_time=wind_time, arrow_length=self._wind_arrow_length_px(),
                 )
 
         self._retranslate_callbacks.append(_retranslate_weather)
@@ -1074,6 +1105,15 @@ class AnalysisPageMixin:
             daemon=True,
         ).start()
 
+        # вітер уздовж усього маршруту -- ОКРЕМИЙ потік (інший набір
+        # точок/годин, ніж старт+посадка вище), запускається тією ж
+        # кнопкою "Отримати метео", без окремої кнопки для користувача
+        route_wind_points = self._compute_wind_sample_points()
+        if route_wind_points:
+            threading.Thread(
+                target=self._route_wind_worker, args=(route_wind_points,), daemon=True,
+            ).start()
+
 
     def _meteo_worker(self, date_str, time_str, start_wp, land_wp):
         """Обгортка: ловить БУДЬ-ЯКУ помилку, щоб вона не падала в консоль, а
@@ -1140,7 +1180,8 @@ class AnalysisPageMixin:
                     wind_spd = h.get("windspeed_10m",  [None] * (idx + 1))[idx]
                     wind_dir = h.get("winddirection_10m", [None] * (idx + 1))[idx]
 
-            map_data.append((wind_dir, wind_spd, az, i18n.t(label_key), err))
+            wind_time_str = f"{hour:02d}:00"
+            map_data.append((wind_dir, wind_spd, az, i18n.t(label_key), err, wind_time_str))
 
         self._last_meteo_raw = raw_cache  # кеш для ретрансляції тексту без мережі
         self.after(0, lambda: self._on_meteo_ready(texts, map_data))
@@ -1206,7 +1247,7 @@ class AnalysisPageMixin:
         self._set_meteo_texts(*texts)
         # запускаємо завантаження тайлів для кожної зони в окремих потоках
         for i, (canvas, item) in enumerate(zip(self._meteo_canvases, map_data)):
-            wind_dir, wind_spd, flight_az, label, err = item
+            wind_dir, wind_spd, flight_az, label, err, wind_time = item
             if err:
                 canvas.delete("all")
                 canvas.create_text(
@@ -1286,12 +1327,13 @@ class AnalysisPageMixin:
                 canvas, wp.lat, wp.lon, zoom, tx_min, tx_max, ty_min, ty_max, image_refs,
                 placeholder_bg=sc, placeholder_outline=sc,
                 flight_az=flight_az, wind_dir=wind_dir, wind_spd=wind_spd,
+                wind_time=wind_time, arrow_length=self._wind_arrow_length_px(),
             )
 
             threading.Thread(
                 target=self._load_area_tiles,
                 args=(
-                    canvas, i, wp.lat, wp.lon, flight_az, wind_dir, wind_spd,
+                    canvas, i, wp.lat, wp.lon, flight_az, wind_dir, wind_spd, wind_time,
                     zoom, tx_min, tx_max, ty_min, ty_max,
                     screen_origin_gx, screen_origin_gy, my_generation,
                 ),
@@ -1302,7 +1344,7 @@ class AnalysisPageMixin:
     def _load_area_tiles(self, canvas: tk.Canvas, idx: int,
                          lat: float, lon: float,
                          flight_az: float | None,
-                         wind_dir: float | None, wind_spd: float | None,
+                         wind_dir: float | None, wind_spd: float | None, wind_time: str | None,
                          zoom: int, tx_min: int, tx_max: int, ty_min: int, ty_max: int,
                          screen_origin_gx: float, screen_origin_gy: float,
                          my_generation: int):
@@ -1354,7 +1396,7 @@ class AnalysisPageMixin:
                 self._meteo_render_params[idx] = (
                     lat, lon, zoom, tiles, image_refs,
                     tx_min, tx_max, ty_min, ty_max,
-                    flight_az, wind_dir, wind_spd,
+                    flight_az, wind_dir, wind_spd, wind_time,
                 )
 
             self.after(0, do_finish)
@@ -1667,10 +1709,13 @@ class AnalysisPageMixin:
         center_lat, center_lon = snapshot["center_lat"], snapshot["center_lon"]
 
         self._trajectory_map_params = (tiles, zoom, tx_min, tx_max, ty_min, ty_max, center_lat, center_lon)
-        render_viewport(
+        result = render_viewport(
             self.trajectory_map_canvas, self.analyzer, zoom, center_lat, center_lon,
             tx_min, tx_max, ty_min, ty_max, tiles, self._trajectory_map_images,
         )
+        if self._route_wind_points:
+            screen_origin_gx, screen_origin_gy = result[4], result[5]
+            self._draw_route_wind_markers(zoom, screen_origin_gx, screen_origin_gy)
 
 
     def _check_populated_areas(self):
@@ -2361,19 +2406,13 @@ class AnalysisPageMixin:
             i18n.t("msg_save_success_fmt", n=len(new_wps), path=path),
         )
 
-    def _prefill_optimization_from_profile(self):
-        """Підтягує крейсерську швидкість/витрату/крен із ПОТОЧНОГО
-        профілю літака (Конфігурація), якщо такий існує. Ємність бака
-        СВІДОМО не чіпається -- вона поза профілем (може відрізнятись
-        від вильоту до вильоту навіть для одного борту, задається
-        окремо щоразу). Якщо профілю немає взагалі, чи він не "plane"
-        (поки що єдиний тип із заповненими польотними полями) -- поля
-        лишаються на вбудованих дефолтах, нічого не ламається."""
-        try:
-            store = aircraft_profiles.load_profiles(aircraft_profiles.default_profiles_path())
-        except Exception:
-            return
-        profile = store.get_current()
+    def _apply_profile_to_optimization_fields(self, profile):
+        """Заповнює крейсерську швидкість/витрату/крен зі СПЕЦИФІЧНОГО
+        профілю (не обов'язково поточного) -- спільна логіка для
+        первинного заповнення при відкритті сторінки й для ручного
+        вибору з випадаючого списку. Якщо профіль не "plane" (поки що
+        єдиний тип із заповненими польотними полями) -- нічого не
+        робить, поля лишаються як були."""
         if profile is None or profile.drone_type != "plane":
             return
         if profile.airspeed_cruise_ms:
@@ -2382,3 +2421,237 @@ class AnalysisPageMixin:
             self.opt_cruise_consumption_var.set(f"{profile.cruise_consumption_lph:.1f}")
         if profile.roll_limit_deg:
             self.opt_roll_limit_var.set(f"{profile.roll_limit_deg:.0f}")
+
+
+    def _prefill_optimization_from_profile(self):
+        """Підтягує крейсерську швидкість/витрату/крен із ПОТОЧНОГО
+        профілю літака (Конфігурація), якщо такий існує -- лише при
+        першому відкритті сторінки. Ємність бака СВІДОМО не чіпається
+        -- вона поза профілем (може відрізнятись від вильоту до вильоту
+        навіть для одного борту, задається окремо щоразу)."""
+        try:
+            store = aircraft_profiles.load_profiles(aircraft_profiles.default_profiles_path())
+        except Exception:
+            return
+        self._apply_profile_to_optimization_fields(store.get_current())
+
+
+    def _refresh_optimize_profile_list(self, event=None):
+        """Перечитує список профілів з диску -- ПЕРЕД кожним відкриттям
+        випадаючого списку (не тільки один раз при побудові сторінки),
+        бо профіль міг з'явитись у "Конфігурації" вже після того, як
+        "Аналіз" збудувався в цьому сеансі роботи програми."""
+        try:
+            store = aircraft_profiles.load_profiles(aircraft_profiles.default_profiles_path())
+        except Exception:
+            store = aircraft_profiles.AircraftProfileStore()
+        names = [p.name for p in store.profiles]
+        self.opt_profile_box.configure(values=names)
+        self._opt_profile_store = store
+        current = store.get_current()
+        if current and not self.opt_profile_var.get():
+            self.opt_profile_var.set(current.name)
+
+
+    def _on_optimize_profile_selected(self, event=None):
+        """Обрано профіль у випадаючому списку "Оптимізації" -- заповнює
+        поля НИЖЧЕ значеннями з НЬОГО (не обов'язково поточного профілю
+        з "Конфігурації"). НЕ змінює сам "поточний" профіль -- вибір тут
+        суто локальна зручність для цього розрахунку, без побічного
+        ефекту на решту програми."""
+        store = getattr(self, "_opt_profile_store", None)
+        if store is None:
+            return
+        name = self.opt_profile_var.get()
+        profile = store.get_by_name(name)
+        self._apply_profile_to_optimization_fields(profile)
+
+    def _compute_wind_sample_points(self):
+        """Точки уздовж маршруту для показу вітру -- кількість залежить
+        від ЗАГАЛЬНОЇ тривалості польоту (крейсерська швидкість --
+        self.cruise_speed_var, м/с, та сама змінна, що й для розрахунку
+        часу прибуття вгорі сторінки):
+            до 60 хв     -> старт + посадка (2 точки)
+            60-180 хв    -> + середина (3 точки)
+            понад 180 хв -> + 1/3 і 2/3 замість середини (4 точки)
+        Кожна точка -- (lat, lon, час_прильоту_у_неї). Розрахунковий
+        час рахується від фактично пройденої ВІДСТАНІ до цієї точки
+        (не по індексу вейпоінта), лінійна інтерполяція вздовж ребра,
+        де опиняється ця частка загальної дистанції."""
+        if self.analyzer is None or not self.analyzer.nav_wps:
+            return []
+        nav_wps = self.analyzer.nav_wps
+        if len(nav_wps) < 2:
+            return []
+
+        cum = [0.0]
+        for i in range(len(nav_wps) - 1):
+            d = haversine_m(nav_wps[i].lat, nav_wps[i].lon, nav_wps[i + 1].lat, nav_wps[i + 1].lon)
+            cum.append(cum[-1] + d)
+        total_dist = cum[-1]
+        if total_dist <= 0:
+            return []
+
+        try:
+            speed = float(self.cruise_speed_var.get())
+            if speed <= 0:
+                raise ValueError
+        except (ValueError, AttributeError):
+            return []
+
+        total_seconds = total_dist / speed
+        total_minutes = total_seconds / 60.0
+
+        if total_minutes <= 60:
+            fractions = [0.0, 1.0]
+        elif total_minutes <= 180:
+            fractions = [0.0, 0.5, 1.0]
+        else:
+            fractions = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]
+
+        import datetime
+        date_str = self.flight_date_var.get().strip()
+        time_str = self.flight_time_var.get().strip()
+        try:
+            departure = datetime.datetime.fromisoformat(f"{date_str}T{time_str}:00")
+        except ValueError:
+            return []
+
+        points = []
+        for frac in fractions:
+            target_dist = frac * total_dist
+            idx = 0
+            while idx < len(cum) - 2 and cum[idx + 1] < target_dist:
+                idx += 1
+            wp1, wp2 = nav_wps[idx], nav_wps[idx + 1]
+            seg_len = cum[idx + 1] - cum[idx]
+            seg_frac = (target_dist - cum[idx]) / seg_len if seg_len > 1e-6 else 0.0
+            seg_frac = max(0.0, min(1.0, seg_frac))
+            lat = wp1.lat + (wp2.lat - wp1.lat) * seg_frac
+            lon = wp1.lon + (wp2.lon - wp1.lon) * seg_frac
+            arrival = departure + datetime.timedelta(seconds=frac * total_seconds)
+            points.append((lat, lon, arrival))
+
+        return points
+
+
+    def _route_wind_worker(self, points):
+        """Фоновий потік вітру УЗДОВЖ маршруту -- запускається разом з
+        рештою метео (_fetch_meteo), НЕ окремою кнопкою (прибрано за
+        результатами тестування -- зайва сутність, коли є "Отримати
+        метео")."""
+        import urllib.request, json
+
+        def fetch_wind_at(lat, lon, dt):
+            date_str = dt.strftime("%Y-%m-%d")
+            hour = dt.hour
+            url = (
+                f"https://api.open-meteo.com/v1/forecast"
+                f"?latitude={lat:.5f}&longitude={lon:.5f}"
+                f"&hourly=windspeed_10m,winddirection_10m"
+                f"&timezone=auto&start_date={date_str}&end_date={date_str}"
+            )
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "MissionAnalyzer/1.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read())
+            except Exception as e:
+                return None, None, str(e)
+
+            h = data.get("hourly", {})
+            times = h.get("time", [])
+            target = f"{date_str}T{hour:02d}:00"
+            idx = next((i for i, t in enumerate(times) if t == target), None)
+            if idx is None:
+                return None, None, i18n.t("msg_no_forecast_for_hour")
+            spd = h.get("windspeed_10m", [None] * (idx + 1))[idx]
+            direction = h.get("winddirection_10m", [None] * (idx + 1))[idx]
+            return direction, spd, None
+
+        results = []
+        for lat, lon, dt in points:
+            wind_dir, wind_spd, err = fetch_wind_at(lat, lon, dt)
+            results.append((lat, lon, dt, wind_dir, wind_spd, err))
+
+        self.after(0, lambda: self._on_route_wind_ready(results))
+
+
+    def _on_route_wind_ready(self, results):
+        self._route_wind_points = results
+        self._load_trajectory_map()
+
+
+    def _wind_arrow_length_px(self) -> float:
+        """ОДНЕ спільне число довжини стрілки вітру для ВСІХ трьох
+        місць (Зліт/Посадка/Маршрут) -- та сама формула
+        (R = viewport_h//2-16, довжина = R*0.6), що вже була на Зльоті/
+        Посадці, але порахована ОДИН РАЗ від self._viewport_h (спільне
+        джерело висоти для всіх карт на "Аналіз"), а НЕ окремо для
+        кожного canvas за його власними W/H -- інакше квадратна area-
+        карта (Зліт/Посадка) і широкий прямокутник (Маршрут) дали б
+        РІЗНІ числа навіть з тим самим viewport_h, бо R рахувався б від
+        min(W,H) конкретного canvas, а не від спільного орієнтира."""
+        viewport_h = getattr(self, "_viewport_h", None) or 700
+        R = viewport_h // 2 - 16
+        return R * 0.6
+
+
+    def _draw_route_wind_markers(self, zoom, screen_origin_gx, screen_origin_gy):
+        """Стрілки вітру на карті "Маршрут" -- ПОВНІСТЮ узгоджені зі
+        Зльотом/Посадкою: та сама довжина (self._wind_arrow_length_px()),
+        той самий формат підпису (час, напрямок, швидкість --
+        wind_marker_label_fmt), підпис ПІСЛЯ вістря стрілки (length+20,
+        як в overview_map.py), а не біля основи. Кожна позначка тут --
+        у ДОВІЛЬНІЙ точці маршруту (не в центрі власної area-карти, як
+        на зльоті/посадці), тому стрілка/підпис МОЖЕ реально вилізти за
+        canvas -- обмежуємо координати в межах видимої області."""
+        length = self._wind_arrow_length_px()
+        W = self.trajectory_map_canvas.winfo_width() or 600
+        H = self.trajectory_map_canvas.winfo_height() or 400
+        margin = 14
+        label_margin = 60  # ширше, підпис тепер 2 рядки й довший (час+напрямок+швидкість)
+
+        for lat, lon, dt, wind_dir, wind_spd, err in self._route_wind_points:
+            gx, gy = lonlat_to_pixel(lat, lon, zoom)
+            x, y = gx - screen_origin_gx, gy - screen_origin_gy
+            if err or wind_dir is None:
+                continue
+
+            # стрілка показує напрямок, КУДИ дме вітер (не звідки -- це
+            # узгоджено з тим самим візуальним трактуванням, що вже є в
+            # overview_map.py для зльоту/посадки)
+            wind_to = (wind_dir + 180) % 360
+            rad = math.radians(wind_to)
+
+            ex = max(margin, min(W - margin, x + length * math.sin(rad)))
+            ey = max(margin, min(H - margin, y - length * math.cos(rad)))
+            self.trajectory_map_canvas.create_line(
+                x, y, ex, ey, fill=theme.MAP_OVERLAY_COLORS["wind"], width=theme.MAP_ARROW_WIDTH,
+                arrow="last", arrowshape=theme.MAP_ARROW_SHAPE, tags=("route_wind",),
+            )
+            self.trajectory_map_canvas.create_oval(
+                x - 4, y - 4, x + 4, y + 4, fill=theme.MAP_OVERLAY_COLORS["wind"], outline="white", tags=("route_wind",),
+            )
+
+            # підпис ПІСЛЯ вістря (length+20 -- та сама точка відліку,
+            # що й у overview_map.py), теж обмежений у межах canvas
+            lx = max(label_margin, min(W - label_margin, x + (length + 20) * math.sin(rad)))
+            ly = max(label_margin, min(H - label_margin, y - (length + 20) * math.cos(rad)))
+
+            label = i18n.t(
+                "wind_marker_label_fmt",
+                time=dt.strftime("%H:%M"), dir=wind_dir, speed=wind_spd,
+                unit=i18n.t("unit_kmh_short"),
+            )
+            # підкладка під текст -- ЄДИНА реалізація для ВСІХ карт
+            # (theme.draw_label_backdrop), справжня альфа-прозорість
+            # через PIL, не пунктирний stipple -- інакше кілька позначок
+            # вітру поруч на "Маршруті" зливались у суцільну темну пляму
+            text_id = self.trajectory_map_canvas.create_text(
+                lx, ly, text=label, fill=theme.MAP_OVERLAY_COLORS["wind"], font=theme.map_overlay_font(),
+                tags=("route_wind",),
+            )
+            bbox = self.trajectory_map_canvas.bbox(text_id)
+            if bbox:
+                theme.draw_label_backdrop(self.trajectory_map_canvas, bbox, self._trajectory_map_images, tag="route_wind")
+                self.trajectory_map_canvas.tag_raise(text_id)
