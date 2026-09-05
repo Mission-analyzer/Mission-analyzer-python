@@ -19,6 +19,7 @@ import math
 import tkinter as tk
 
 import i18n
+import theme
 from analyzer import MissionAnalyzer
 from geo import TILE_SIZE, lonlat_to_tile_xy, lonlat_to_pixel
 from map_view import _decode_tile_image, MapTooLargeError, draw_single_tile
@@ -128,6 +129,8 @@ def begin_area_render(
     flight_az: float | None = None,
     wind_dir: float | None = None,
     wind_spd: float | None = None,
+    wind_time: str | None = None,
+    arrow_length: float | None = None,
 ) -> tuple[float, float]:
     """
     Перший крок прогресивної відмальовки area-карти (Взліт/Посадка --
@@ -184,48 +187,75 @@ def begin_area_render(
         y = cy - (R + 14) * math.cos(rad)
         canvas.create_text(
             x, y, text=lbl, fill="#000000",
-            font=("Segoe UI", 8, "bold"), tags="overlay_layer",
+            font=theme.map_overlay_font(theme.MAP_OVERLAY_SMALL_FONT_SIZE), tags="overlay_layer",
         )
 
     def arrow(az_deg: float, length: float, color: str, width: int, lbl: str, lbl_color: str):
         rad = math.radians(az_deg)
         ex = cx + length * math.sin(rad)
         ey = cy - length * math.cos(rad)
+        # НЕ виходимо за межі canvas -- обрізаємо кінець стрілки в межах
+        # [margin, W-margin]/[margin, H-margin], якщо розрахункова точка
+        # опинилась би зовні (актуально, коли arrow_length переданий
+        # ЗОВНІ -- напр. з "Маршруту", де довжина рахується від спільного
+        # self._viewport_h, а не від W/H САМЕ цього canvas).
+        margin = 14
+        ex = max(margin, min(W - margin, ex))
+        ey = max(margin, min(H - margin, ey))
         canvas.create_line(
             cx, cy, ex, ey, fill=color, width=width,
-            arrow="last", arrowshape=(12, 14, 5), tags="overlay_layer",
+            arrow="last", arrowshape=theme.MAP_ARROW_SHAPE, tags="overlay_layer",
         )
         lx = cx + (length + 20) * math.sin(rad)
         ly = cy - (length + 20) * math.cos(rad)
-        canvas.create_text(
+        # той самий захист для підпису -- ширший запас (40px), бо сам
+        # текст (кілька символів) займає місце ПОНАД саму точку lx,ly
+        label_margin = 40
+        lx = max(label_margin, min(W - label_margin, lx))
+        ly = max(label_margin, min(H - label_margin, ly))
+        text_id = canvas.create_text(
             lx, ly, text=lbl, fill=lbl_color,
-            font=("Segoe UI", 8, "bold"), tags="overlay_layer",
+            font=theme.map_overlay_font(), tags="overlay_layer",
         )
+        bbox = canvas.bbox(text_id)
+        if bbox:
+            theme.draw_label_backdrop(canvas, bbox, image_refs)
+            canvas.tag_raise(text_id)
 
     if flight_az is not None:
-        arrow(flight_az, R * 0.70, "#39FF14", 3, f"Az {flight_az:.0f}°", "#39FF14")
+        arrow(flight_az, R * 0.70, theme.MAP_OVERLAY_COLORS["flight_az"], theme.MAP_ARROW_WIDTH, f"Az {flight_az:.0f}°", theme.MAP_OVERLAY_COLORS["flight_az"])
 
     if wind_dir is not None:
         wind_to = (wind_dir + 180) % 360
-        arrow(
-            wind_to, R * 0.60, "#00BFFF", 3,
-            f"{wind_spd:.0f}{i18n.t('unit_kmh_short')}\n{wind_dir:.0f}°", "#00BFFF",
+        wind_len = arrow_length if arrow_length is not None else R * 0.60
+        # ЄДИНИЙ формат підпису -- час, напрямок, швидкість -- ТОЙ САМИЙ,
+        # що й на карті "Маршрут" (wind_marker_label_fmt), а не окремий
+        # формат тільки для цього місця.
+        wind_label = i18n.t(
+            "wind_marker_label_fmt",
+            time=wind_time or "", dir=wind_dir, speed=wind_spd,
+            unit=i18n.t("unit_kmh_short"),
         )
+        arrow(wind_to, wind_len, theme.MAP_OVERLAY_COLORS["wind"], theme.MAP_ARROW_WIDTH, wind_label, theme.MAP_OVERLAY_COLORS["wind"])
 
         if flight_az is not None:
             diff = abs((wind_dir - flight_az + 360) % 360)
             if diff > 180:
                 diff = 360 - diff
             cross = abs(90 - abs(diff - 90))
-            color = "#FF4444" if cross > 30 else "#44FF88"
-            canvas.create_rectangle(
-                4, H - 22, W - 4, H - 4,
-                fill="#000000", outline="", stipple="gray50", tags="overlay_layer",
-            )
-            canvas.create_text(
-                W // 2, H - 12, fill=color, font=("Segoe UI", 8, "bold"),
+            color = theme.MAP_OVERLAY_COLORS["danger"] if cross > 30 else theme.MAP_OVERLAY_COLORS["safe"]
+            # текст СПЕРШУ (потрібен його bbox для підкладки під розмір
+            # ЦЬОГО конкретного тексту -- та сама єдина реалізація
+            # підкладки, що й для решти підписів на карті, замість
+            # окремої фіксованої на всю ширину смуги, як було раніше)
+            text_id = canvas.create_text(
+                W // 2, H - 12, fill=color, font=theme.map_overlay_font(theme.MAP_OVERLAY_SMALL_FONT_SIZE),
                 text=i18n.t("weather_crosswind_map_label_fmt", cross=cross), tags="overlay_layer",
             )
+            bbox = canvas.bbox(text_id)
+            if bbox:
+                theme.draw_label_backdrop(canvas, bbox, image_refs)
+                canvas.tag_raise(text_id)
 
     canvas.config(scrollregion=(0, 0, W, H))
     return screen_origin_gx, screen_origin_gy
@@ -236,7 +266,9 @@ def render_area_map(canvas: tk.Canvas, lat: float, lon: float, zoom: int,
                     tx_min: int, tx_max: int, ty_min: int, ty_max: int,
                     flight_az: float | None = None,
                     wind_dir: float | None = None,
-                    wind_spd: float | None = None):
+                    wind_spd: float | None = None,
+                    wind_time: str | None = None,
+                    arrow_length: float | None = None):
     """
     Синхронна (НЕ прогресивна) обгортка над begin_area_render()/
     draw_single_tile() -- для місць, де всі тайли вже готові заздалегідь
@@ -247,6 +279,7 @@ def render_area_map(canvas: tk.Canvas, lat: float, lon: float, zoom: int,
     screen_origin_gx, screen_origin_gy = begin_area_render(
         canvas, lat, lon, zoom, tx_min, tx_max, ty_min, ty_max, image_refs,
         flight_az=flight_az, wind_dir=wind_dir, wind_spd=wind_spd,
+        wind_time=wind_time, arrow_length=arrow_length,
     )
     for tx in range(tx_min, tx_max + 1):
         for ty in range(ty_min, ty_max + 1):
