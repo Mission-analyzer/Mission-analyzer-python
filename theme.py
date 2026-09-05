@@ -215,8 +215,21 @@ def apply_theme(root: tk.Tk, dark: bool = False) -> dict:
         "TSpinbox", fieldbackground=colors["panel"], foreground=colors["text"],
         bordercolor=colors["border"], arrowsize=12,
     )
-    style.configure("TCombobox", fieldbackground=colors["panel"], foreground=colors["text"], bordercolor=colors["border"])
-    style.map("TCombobox", fieldbackground=[("readonly", colors["panel"])])
+    style.configure(
+        "TCombobox", fieldbackground=colors["panel"], foreground=colors["text"],
+        bordercolor=colors["border"], background=colors["panel"], arrowcolor=colors["text"],
+    )
+    style.map(
+        "TCombobox",
+        fieldbackground=[("readonly", colors["panel"])],
+        # без цього кнопка-стрілка (окремий елемент стилю, НЕ те саме,
+        # що fieldbackground -- той чіпає лише текстове поле) лишається
+        # на стандартному СВІТЛОМУ кольорі теми ttk за замовчуванням і
+        # особливо помітно "спалахує" світлим при наведенні миші поверх
+        # темної теми навколо -- саме той ефект, що впадав у вічі.
+        background=[("readonly", colors["panel"]), ("active", colors["border"]), ("!active", colors["panel"])],
+        arrowcolor=[("disabled", colors["text_muted"])],
+    )
     # список випадаючого combobox -- окремий шар (Tk listbox всередині
     # popdown-вікна), style.map тут не діє, задається напряму опцією
     root.option_add("*TCombobox*Listbox.background", colors["panel"])
