@@ -131,3 +131,20 @@ def parse_waypoints(path: str) -> list[Waypoint]:
         wps.append(wp)
 
     return wps
+
+
+def write_waypoints(path: str, wps: list[Waypoint]) -> None:
+    """Записує список Waypoint у файл формату QGC WPL 110 (той самий
+    формат, що читає parse_waypoints() -- симетрична пара). index у
+    кожній точці переприсвоюється ПОСЛІДОВНО від 0 (не покладається на
+    те, що вже було в wp.index -- виклик може передати список зі
+    вставленими/видаленими точками, де оригінальні index уже
+    неактуальні)."""
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("QGC WPL 110\n")
+        for i, wp in enumerate(wps):
+            f.write(
+                f"{i}\t{wp.current}\t{wp.frame}\t{wp.command}\t"
+                f"{wp.param1}\t{wp.param2}\t{wp.param3}\t{wp.param4}\t"
+                f"{wp.lat}\t{wp.lon}\t{wp.alt}\t{wp.autocontinue}\n"
+            )
