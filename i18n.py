@@ -396,6 +396,13 @@ _TR: dict[str, dict[str, str]] = {
     },
     "box_takeoff_profile": {"uk": "Профіль висоти — зліт", "en": "Elevation profile — takeoff"},
     "box_route_top_view": {"uk": "Маршрут — вигляд згори", "en": "Route — top view"},
+    "msg_no_forecast_for_hour": {
+        "uk": "Немає прогнозу на цю годину", "en": "No forecast for this hour",
+    },
+    "wind_marker_label_fmt": {
+        "uk": "{time}\n{dir:.0f}° {speed:.0f}{unit}",
+        "en": "{time}\n{dir:.0f}° {speed:.0f}{unit}",
+    },
     "box_glide_chart": {"uk": "Графік глісади", "en": "Glide slope chart"},
     "btn_save_pdf": {"uk": "Зберегти PDF", "en": "Save PDF"},
     "dlg_save_report_title": {"uk": "Зберегти звіт аналізу", "en": "Save analysis report"},
@@ -489,6 +496,7 @@ _TR: dict[str, dict[str, str]] = {
         "uk": "Місію збережено: {n} точок.\n{path}",
         "en": "Mission saved: {n} points.\n{path}",
     },
+    "lbl_aircraft_profile": {"uk": "Профіль літака:", "en": "Aircraft profile:"},
     "lbl_tank_capacity": {"uk": "Ємність бака:", "en": "Tank capacity:"},
     "lbl_liters": {"uk": "л", "en": "L"},
     "lbl_cruise_consumption": {"uk": "Витрата (крейсер):", "en": "Consumption (cruise):"},
