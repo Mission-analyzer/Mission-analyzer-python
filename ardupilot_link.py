@@ -1456,6 +1456,13 @@ class ArduPilotLinkMixin:
         ("ROLL_LIMIT_DEG",  "Макс. крен (°)",                 "Max bank angle (deg)"),
         ("PTCH_LIM_MAX_DEG","Макс. тангаж вгору (°)",         "Max pitch up (deg)"),
         ("PTCH_LIM_MIN_DEG","Макс. тангаж вниз (°)",          "Max pitch down (deg)"),
+        # --- TECS (реальна льотна продуктивність -- глісада/набір,
+        # ArduPilot прямо радить вимірювати ПОЛЬОТОМ, не вгадувати з
+        # документації, звідси й цінність зчитати РЕАЛЬНІ значення з
+        # конкретного борту, а не покладатись на дефолти прошивки) ---
+        ("TECS_SINK_MIN",   "Мін. швидкість зниження (м/с)",  "Min sink rate (m/s)"),
+        ("TECS_CLMB_MAX",   "Макс. швидкість набору (м/с)",   "Max climb rate (m/s)"),
+        ("TECS_LAND_ARSPD", "Швидкість заходу на посадку (м/с)", "Landing approach airspeed (m/s)"),
         # --- Висоти ---
         ("RTL_ALTITUDE",    "Висота RTL (м)",                 "RTL altitude (m)"),
         ("TKOFF_ALT",       "Висота набору після зльоту (м)", "Takeoff altitude (m)"),
