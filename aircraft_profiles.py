@@ -59,6 +59,7 @@ PROFILE_FIELDS_BY_TYPE: dict[str, list[str]] = {
         "cruise_consumption_lph",
         "airspeed_min_ms", "airspeed_cruise_ms", "airspeed_max_ms",
         "roll_limit_deg", "pitch_limit_max_deg", "pitch_limit_min_deg",
+        "sink_rate_min_ms", "climb_rate_max_ms", "landing_airspeed_ms",
     ],
     "copter": [],
     "rover": [],
@@ -78,6 +79,9 @@ PROFILE_FIELD_META: dict[str, tuple[str, str]] = {
     "roll_limit_deg": ("lbl_roll_limit", "lbl_deg"),
     "pitch_limit_max_deg": ("lbl_pitch_limit_max", "lbl_deg"),
     "pitch_limit_min_deg": ("lbl_pitch_limit_min", "lbl_deg"),
+    "sink_rate_min_ms": ("lbl_sink_rate_min", "lbl_ms"),
+    "climb_rate_max_ms": ("lbl_climb_rate_max", "lbl_ms"),
+    "landing_airspeed_ms": ("lbl_landing_airspeed", "lbl_ms"),
 }
 
 # Поточна версія СХЕМИ профілю (не версія конкретного літака!) --
@@ -87,7 +91,7 @@ PROFILE_FIELD_META: dict[str, tuple[str, str]] = {
 # структури збережено конкретний профіль, і за потреби мігрувати старі
 # записи, а не тихо ламатись чи губити дані на невідомих полях.
 PROFILE_SCHEMA_VERSION_MAJOR = 1
-PROFILE_SCHEMA_VERSION_MINOR = 1
+PROFILE_SCHEMA_VERSION_MINOR = 2  # +3 TECS-поля (sink_rate_min/climb_rate_max/landing_airspeed)
 
 
 @dataclass
@@ -114,6 +118,15 @@ class AircraftProfile:
     roll_limit_deg: float = 0.0     # максимальний крен (як ROLL_LIMIT_DEG)
     pitch_limit_max_deg: float = 0.0  # максимальний кут набору (PTCH_LIM_MAX_DEG)
     pitch_limit_min_deg: float = 0.0  # максимальний кут зниження (PTCH_LIM_MIN_DEG, зазвичай від'ємний)
+    # Реальна льотна продуктивність планера -- ArduPilot прямо радить
+    # вимірювати ПОЛЬОТОМ (TECS tuning guide), не брати з документації
+    # чи вгадувати. Ті самі TECS_-параметри вже читаються в живому
+    # "Параметри" при підключенні борту (ardupilot_link.py) -- тут те
+    # саме значення, просто заповнене вручну для офлайн-розрахунків
+    # "Аналізу", коли борт не підключений.
+    sink_rate_min_ms: float = 0.0     # мін. швидкість зниження на крейсерській (TECS_SINK_MIN)
+    climb_rate_max_ms: float = 0.0    # макс. швидкість набору на повному газі (TECS_CLMB_MAX)
+    landing_airspeed_ms: float = 0.0  # швидкість заходу на посадку (TECS_LAND_ARSPD, якщо -1 -- не задано)
 
     def format_version(self) -> str:
         """"XX.XX" -- двозначні major/minor, як просив користувач

@@ -1,0 +1,22 @@
+{
+  "profiles": [
+    {
+      "name": "XX-1",
+      "version_major": 1,
+      "version_minor": 2,
+      "drone_type": "plane",
+      "engine_type": "ice",
+      "cruise_consumption_lph": 7.5,
+      "airspeed_min_ms": 33.0,
+      "airspeed_cruise_ms": 47.0,
+      "airspeed_max_ms": 50.0,
+      "roll_limit_deg": 25.0,
+      "pitch_limit_max_deg": 20.0,
+      "pitch_limit_min_deg": -25.0,
+      "sink_rate_min_ms": 2.0,
+      "climb_rate_max_ms": 2.5,
+      "landing_airspeed_ms": 42.0
+    }
+  ],
+  "current_name": "XX-1"
+}
