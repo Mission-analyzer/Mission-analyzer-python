@@ -697,6 +697,12 @@ class MissionPageMixin:
         # відкритті "Аналіз" (_ensure_analysis_built), а карта на "Місія"
         # стартує одразу й незалежно від нього.
         self._analysis_built = False
+        # скидаємо кешовані результати "Обліт НП"/"Оптимізація"/вітру
+        # ПОПЕРЕДНЬОЇ місії -- інакше вони лишаються видимими на картах
+        # нової місії, поки користувач не натисне відповідну кнопку
+        # заново (реальний баг, виявлений на практиці)
+        if hasattr(self, "_reset_analysis_result_caches"):
+            self._reset_analysis_result_caches()
         self.status_var.set(i18n.t("status_loaded_fmt", n=len(self.analyzer.nav_wps)))
         self._compute_arrival_time()
         self._save_settings()

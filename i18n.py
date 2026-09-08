@@ -613,6 +613,14 @@ _TR: dict[str, dict[str, str]] = {
         "en": "Legs that could NOT be auto-detoured ({n}):",
     },
     "opt_leg_failed_marker": {"uk": "не вдалось обійти", "en": "could not detour"},
+    "opt_merged_legs_header_fmt": {
+        "uk": "Об'єднано коротких сусідніх ребер для успішного обходу ({n}):",
+        "en": "Short adjacent legs merged for a successful detour ({n}):",
+    },
+    "opt_merged_leg_line_fmt": {
+        "uk": "  Ребра {leg1}+{leg2}: точку {removed} видалено з маршруту, команди на ній (якщо були) перенесено на найближчу нову точку обходу",
+        "en": "  Legs {leg1}+{leg2}: point {removed} removed from the route, any commands on it moved to the nearest new detour point",
+    },
     "opt_before_after_header": {
         "uk": "Відстань до НП: було / стало",
         "en": "Distance to settlement: before / after",
@@ -629,6 +637,10 @@ _TR: dict[str, dict[str, str]] = {
     "box_populated_areas_map": {"uk": "Карта маршруту й населених пунктів", "en": "Route & settlements map"},
     "box_settlement_violations": {"uk": "Порушення мінімальної відстані", "en": "Minimum distance violations"},
     "status_fetching_settlements": {"uk": "Пошук населених пунктів (Overpass API)...", "en": "Fetching settlements (Overpass API)..."},
+    "status_zones_partial_coverage": {
+        "uk": "Увага: частина території не довантажилась (мережева помилка) -- дані неповні, спробуйте ще раз",
+        "en": "Warning: part of the area failed to load (network error) -- data incomplete, try again",
+    },
     "status_checking_leg_fmt": {"uk": "Перевірка ребра {done}/{total}...", "en": "Checking leg {done}/{total}..."},
     "status_settlements_error_fmt": {"uk": "Помилка: {error}", "en": "Error: {error}"},
     "status_settlements_found_fmt": {

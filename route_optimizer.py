@@ -82,7 +82,7 @@ MAX_MISSION_WAYPOINTS = 255. Офіційна документація ArduPilot
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from geo import haversine_m
 
@@ -98,6 +98,23 @@ from geo import haversine_m
 # сумісні з молодшими платами -- безпечний орієнтир навіть якщо
 # конкретна місія піде на менш потужну плату, ніж Cube+).
 MAX_MISSION_WAYPOINTS = 255
+
+# Побудова графа обходу (_project/_unproject) і перевірка "Обліт НП"
+# (populated_areas._point_to_segment_m) рахують відстань у ДВОХ
+# незалежних локальних проекціях з РІЗНОЮ опорною широтою (тут --
+# середня по всьому графу, там -- середина конкретного відрізка, що
+# перевіряється). Різні опорні широти -> різні метри-на-градус-довготи
+# -> систематична похибка в кілька метрів. ВИЯВЛЕНО НА ПРАКТИЦІ:
+# оптимізована місія, збережена у файл і перевірена заново "Обліт НП",
+# показувала "порушення" на 999-1000м -- рівно на межі порогу, не
+# справжня небезпека, а розбіжність між двома методами вимірювання.
+#
+# Виправлення НАВМИСНЕ зроблено ТУТ (у побудові геометрії), а НЕ як
+# допуск у самій перевірці "Обліт НП" -- та перевірка має лишатись
+# ЧЕСНОЮ й точною для БУДЬ-ЯКОГО маршруту (не тільки оптимізованого
+# цим модулем), інакше універсальний допуск ховав би й СПРАВЖНІ
+# порушення на межі порогу від маршрутів іншого походження.
+SAFETY_MARGIN_MULT = 1.015  # +1.5% -- з запасом покриває спостережену похибку в кілька метрів на кілометр
 
 
 # ============================================================
@@ -208,6 +225,21 @@ class LegOptimizationResult:
     obstacles_considered: list[ObstacleCircle]      # які НП враховані при побудові графа для цього ребра
     failed: bool = False             # True якщо shortest_path_around_obstacles не знайшов шляху
     failure_reason: str | None = None  # текст помилки, якщо failed=True (для звіту користувачу)
+    unstable_convergence: bool = False  # True якщо ІТЕРАТИВНЕ уточнення (nearby-розширення при
+    # виявленні нових порушень) вичерпало ліміт ітерацій, так і НЕ стабілізувавшись -- готовий
+    # шлях МОЖЕ ДОСІ порушувати поріг для якогось НП, що не влізло в останню перевірку. НЕ те
+    # саме, що failed -- тут шлях є, він просто не гарантовано безпечний на 100%.
+    merged_with_next: bool = False  # True якщо ЦЕ ребро об'єднане з НАСТУПНИМ (коротке ребро,
+    # окремо геометрично неможливе -- разом із сусіднім довше й обхід став можливим). inserted_
+    # waypoints/new_distance_km тут ОХОПЛЮЮТЬ ОБИДВА оригінальних ребра одразу.
+    absorbed_into_previous: bool = False  # True якщо ЦЕ ребро поглинуте ПОПЕРЕДНІМ (результат
+    # злиття -- дивитись дані в попередньому leg_result, це лише "тінь", реальних даних не несе.
+    removed_waypoint_index: int | None = None  # тільки якщо merged_with_next: індекс (у nav_wps)
+    # оригінального вейпоінта МІЖ двома об'єднаними ребрами, який зникає з фінального маршруту --
+    # ВИКЛИКАЮЧИЙ код (analysis_page.py) має перенести на нього прив'язані команди на найближчу
+    # НОВУ точку, а не мовчки їх загубити.
+    residual_violations: list[str] = field(default_factory=list)  # назви НП, порушення яких
+    # лишились НЕВИРІШЕНИМИ після вичерпання ітерацій -- для явного показу в звіті користувачу
 
 
 @dataclass
@@ -610,7 +642,10 @@ def optimize_leg(
     бути готовий це зловити (на боці UI: показати повідомлення "поріг
     задовеликий для цього короткого ребра", не падати мовчки)."""
     obstacles = [
-        ObstacleCircle(name=s["name"], lat=s["lat"], lon=s["lon"], radius_km=threshold_km)
+        ObstacleCircle(
+            name=s["name"], lat=s["lat"], lon=s["lon"],
+            radius_km=threshold_km * SAFETY_MARGIN_MULT,
+        )
         for s in nearby_settlements
     ]
 
@@ -704,9 +739,6 @@ def optimize_route(
     NEARBY_MARGIN_MULT = 3.0
 
     legs_results: list[LegOptimizationResult] = []
-    new_route: list[tuple[float, float]] = [(nav_wps[0].lat, nav_wps[0].lon)]
-    total_original_m = 0.0
-    total_new_m = 0.0
 
     # ОДИН запит до Overpass на ВЕСЬ маршрут (та сама логіка, що вже
     # надійно працює в "Обліт НП" -- populated_areas.fetch_settlements
@@ -736,9 +768,68 @@ def optimize_route(
                 if _pa._point_to_segment_m(s["lat"], s["lon"], wp1.lat, wp1.lon, wp2.lat, wp2.lon)
                 < threshold_km * 1000 * NEARBY_MARGIN_MULT
             ]
-            try:
-                leg_result = optimize_leg(wp1.lat, wp1.lon, wp2.lat, wp2.lon, nearby, threshold_km, i)
-            except RuntimeError as e:
+
+            # ІТЕРАТИВНЕ уточнення множини перешкод -- ВИЯВЛЕНА НА
+            # ПРАКТИЦІ проблема: обхід одного НП може наблизити НОВИЙ
+            # шлях до ІНШОГО НП, якого не було в "nearby" (бо той був
+            # задалеко від ОРИГІНАЛЬНОЇ прямої лінії, хоч і близько до
+            # ГОТОВОЇ обхідної дуги). Граф дотичних чесно уникає УСІХ
+            # ПЕРЕДАНИХ ЙОМУ перешкод одночасно -- проблема не в
+            # ньому, а в тому, що щось релевантне могло не потрапити
+            # у вхідні дані. Жоден ФІКСОВАНИЙ множник NEARBY_MARGIN_MULT
+            # не гарантує коректності для будь-якої густини сіл --
+            # правильне рішення: перевірити готовий шлях на порушення,
+            # ще не врахованих обмежень, і при потребі перебудувати
+            # граф З РОЗШИРЕНИМ набором, повторюючи до стабільності.
+            MAX_REFINE_ITERATIONS = 5
+            considered_keys = {(s["name"], s["lat"], s["lon"]) for s in nearby}
+            leg_result = None
+            residual_violations = []
+            for _refine_i in range(MAX_REFINE_ITERATIONS):
+                try:
+                    leg_result = optimize_leg(wp1.lat, wp1.lon, wp2.lat, wp2.lon, nearby, threshold_km, i)
+                except RuntimeError as e:
+                    leg_result = None
+                    refine_error = e
+                    break
+
+                new_path = [(wp1.lat, wp1.lon)] + leg_result.inserted_waypoints + [(wp2.lat, wp2.lon)]
+                newly_violated = []
+                for s in settlements:
+                    key = (s["name"], s["lat"], s["lon"])
+                    if key in considered_keys:
+                        continue
+                    min_d = min(
+                        _pa._point_to_segment_m(
+                            s["lat"], s["lon"],
+                            new_path[j][0], new_path[j][1], new_path[j + 1][0], new_path[j + 1][1],
+                        )
+                        for j in range(len(new_path) - 1)
+                    )
+                    if min_d < threshold_km * 1000:
+                        newly_violated.append(s)
+
+                if not newly_violated:
+                    break  # стабільно -- новий шлях не наблизився до жодної НЕврахованої перешкоди
+
+                residual_violations = [s["name"] for s in newly_violated]
+                nearby = nearby + newly_violated
+                considered_keys.update((s["name"], s["lat"], s["lon"]) for s in newly_violated)
+                # цикл повторюється -- перебудовуємо граф з розширеним nearby
+            else:
+                # ЦИКЛ ВИЧЕРПАВ MAX_REFINE_ITERATIONS БЕЗ break -- жодного
+                # разу не стабілізувався. leg_result (з ОСТАННЬОЇ ітерації)
+                # МОЖЕ ДОСІ порушувати поріг для НП з residual_violations
+                # (вони так і не потрапили в ОСТАННІЙ перерахований граф --
+                # цикл додав їх у nearby, але не встиг перерахувати ще раз
+                # у межах ліміту). НЕ позначаємо як failed (шлях є,
+                # можливо навіть прийнятний), але ЯВНО попереджаємо --
+                # раніше це проходило МОВЧКИ, як повністю надійний результат.
+                if leg_result is not None:
+                    leg_result.unstable_convergence = True
+                    leg_result.residual_violations = residual_violations
+
+            if leg_result is None:
                 # геометрично неможливо обійти (напр. ребро закоротке за
                 # 2×threshold_km, чи перешкоди оточують кінець ребра) --
                 # НЕ валимо ВЕСЬ розрахунок через ОДНЕ проблемне ребро:
@@ -759,7 +850,7 @@ def optimize_route(
                 leg_result = LegOptimizationResult(
                     leg_index=i, original_distance_km=d_km, new_distance_km=d_km,
                     inserted_waypoints=[], obstacles_considered=failed_obstacles,
-                    failed=True, failure_reason=str(e),
+                    failed=True, failure_reason=str(refine_error),
                 )
         else:
             # виключене ребро (зона посадки) -- пряма лінія без обходу
@@ -770,19 +861,77 @@ def optimize_route(
             )
 
         legs_results.append(leg_result)
-        total_original_m += leg_result.original_distance_km * 1000.0
-        total_new_m += leg_result.new_distance_km * 1000.0
-        # new_route -- лише (lat, lon) для малювання карти (той самий
-        # формат, що й original_route); ПОВНА версія з висотою -- в
-        # legs_results[].inserted_waypoints, для майбутнього експорту
-        new_route.extend(leg_result.inserted_waypoints)
-        new_route.append((wp2.lat, wp2.lon))
 
         if progress_callback is not None:
             progress_callback(i + 1, n_legs, leg_result)
 
+    # --- Друга фаза: спроба ОБ'ЄДНАННЯ сусідніх FAILED ребер ---
+    # Коротке ребро (< ~2×threshold_km) геометрично не має куди
+    # відступити для обходу, тримаючи ОБИДВА кінці фіксованими --
+    # об'єднання із сусіднім ребром (спільний вейпоінт МІЖ ними
+    # тимчасово прибирається) дає довший відрізок і більше простору
+    # для маневру. Тільки СУСІДНІ failed+failed пари -- вже вдалі
+    # ребра не чіпаємо, менше побічних ефектів.
+    i = 0
+    while i < len(legs_results) - 1:
+        lr1, lr2 = legs_results[i], legs_results[i + 1]
+        if lr1.failed and lr2.failed:
+            wp_start = nav_wps[lr1.leg_index]
+            wp_end = nav_wps[lr2.leg_index + 1]
+
+            combined_keys = set()
+            combined_nearby = []
+            for obs in lr1.obstacles_considered + lr2.obstacles_considered:
+                key = (obs.name, obs.lat, obs.lon)
+                if key not in combined_keys:
+                    combined_keys.add(key)
+                    combined_nearby.append({
+                        "name": obs.name, "lat": obs.lat, "lon": obs.lon,
+                        "place": "", "population": None,
+                    })
+
+            try:
+                merged = optimize_leg(
+                    wp_start.lat, wp_start.lon, wp_end.lat, wp_end.lon,
+                    combined_nearby, threshold_km, lr1.leg_index,
+                )
+            except RuntimeError:
+                i += 1
+                continue  # об'єднання теж не допомогло -- обидва лишаються failed, як були
+
+            merged.merged_with_next = True
+            merged.removed_waypoint_index = lr1.leg_index + 1
+            legs_results[i] = merged
+            legs_results[i + 1] = LegOptimizationResult(
+                leg_index=lr2.leg_index, original_distance_km=0.0, new_distance_km=0.0,
+                inserted_waypoints=[], obstacles_considered=[],
+                absorbed_into_previous=True,
+            )
+            i += 2  # обидва вже оброблені як пара -- не намагаємось об'єднати ще й з наступним
+        else:
+            i += 1
+
+    # --- Підсумки рахуємо ВЖЕ З результату злиття (не під час основного
+    # циклу) -- поглинуте ребро (absorbed_into_previous) пропускається
+    # цілком, а об'єднане (merged_with_next) вносить свою ПОВНУ (за
+    # обидва оригінальних ребра) відстань і список точок обходу.
+    new_route: list[tuple[float, float]] = [(nav_wps[0].lat, nav_wps[0].lon)]
+    total_original_m = 0.0
+    total_new_m = 0.0
+    for lr in legs_results:
+        if lr.absorbed_into_previous:
+            continue
+        total_original_m += lr.original_distance_km * 1000.0
+        total_new_m += lr.new_distance_km * 1000.0
+        new_route.extend(lr.inserted_waypoints)
+        end_index = lr.removed_waypoint_index + 1 if lr.merged_with_next else lr.leg_index + 1
+        wp_end = nav_wps[end_index]
+        new_route.append((wp_end.lat, wp_end.lon))
+
     original_route = [(wp.lat, wp.lon) for wp in nav_wps]
-    total_waypoints = len(nav_wps) + sum(len(lr.inserted_waypoints) for lr in legs_results)
+    total_waypoints = len(nav_wps) + sum(
+        len(lr.inserted_waypoints) for lr in legs_results if not lr.absorbed_into_previous
+    ) - sum(1 for lr in legs_results if lr.merged_with_next)  # -1 за кожне злиття: один вейпоінт зникає
 
     fuel_check = compute_fuel_check(total_new_m / 1000.0, fuel_budget) if fuel_budget else None
 

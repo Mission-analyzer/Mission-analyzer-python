@@ -22,6 +22,7 @@ import i18n
 import theme
 import icons
 import settings
+import aircraft_profiles
 
 from mission_page import MissionPageMixin
 from mission_editor import MissionEditorMixin
@@ -72,6 +73,7 @@ class App(
     def __init__(self):
         super().__init__()
 
+        self._seed_aircraft_profiles_if_missing()
         self._settings_data = settings.load_settings(self._settings_path())
         saved_lang = self._settings_data.get("lang")
         if saved_lang in i18n.LANGS:
@@ -98,7 +100,8 @@ class App(
         self._flight_conn = None   # активне з'єднання з польотним контролером (pymavlink/pyserial)
         self._scripted_commands = []  # знайдені MCP-COMMAND у .lua на SD
         self._hud_baro_temp = None    # температура барометра для HUD (оновлюється при кожному Info)
-        self._hud_state = {}          # поточний стан HUD (roll/pitch/alt) -- заповнюється потоком
+        self._hud_state = {}          # поточний стан HUD (roll/pitch/alt)
+        self._startup_statustext = None  # рядок версії з STATUSTEXT при підключенні
 
         # --- реєстр для перемикання мови БЕЗ перестворення дерева віджетів ---
         # _i18n_registry: (widget, option, key, kwargs) -- прості статичні
@@ -181,6 +184,34 @@ class App(
             if os.path.isfile(path):
                 return path
         return None
+
+
+    def _seed_aircraft_profiles_if_missing(self):
+        """Якщо поруч з .exe ще НЕМАЄ aircraft_profiles.json (перший
+        запуск ЦІЄЇ конкретної збірки чи взагалі перший запуск програми
+        користувачем) -- і при цьому в збірку вкладений "зерновий" файл
+        aircraft_profiles_seed.json (через datas у main.spec, той самий
+        механізм, що й для icon.png/logo.png) -- копіює його як
+        стартовий вміст. Далі це вже ЗВИЧАЙНИЙ, повністю редагований
+        файл користувача -- копіювання відбувається РІВНО ОДИН РАЗ,
+        не перезаписує щоразу (інакше користувач втрачав би власні
+        зміни/профілі при кожному оновленні збірки).
+
+        Без цього кроку кожна НОВА зібрана версія .exe стартувала б із
+        ПОРОЖНІМ списком профілів -- тестовий/типовий профіль існував
+        би лише на машині розробника (де файл уже створений вручну),
+        а не в самій поставленій збірці."""
+        real_path = aircraft_profiles.default_profiles_path()
+        if os.path.exists(real_path):
+            return  # вже є свій файл -- НЕ чіпаємо, що б там не лежало
+        seed_path = self._find_asset(("aircraft_profiles_seed.json",))
+        if seed_path is None:
+            return  # зерна немає в цій збірці -- нормально, просто порожній старт
+        try:
+            import shutil
+            shutil.copyfile(seed_path, real_path)
+        except OSError:
+            pass  # не вдалось скопіювати -- не критично, просто стартуємо порожніми
 
 
     @staticmethod

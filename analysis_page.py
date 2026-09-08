@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import threading
+import dataclasses
 import math
 import urllib.request
 import urllib.parse
@@ -30,6 +31,7 @@ from mission_page import MISSION_THEME_DARK, MISSION_THEME_LIGHT
 import theme
 from map_view import fetch_tiles, bind_pan, MapTooLargeError, render_viewport, draw_single_tile
 import populated_areas
+import restricted_zones
 import route_optimizer
 import aircraft_profiles
 from waypoints import Waypoint, write_waypoints
@@ -383,6 +385,11 @@ class AnalysisPageMixin:
         threshold_entry = ttk.Entry(populated_controls, textvariable=self.settlement_threshold_var, width=6)
         threshold_entry.pack(side="left", padx=(0, 4))
         self._reg_i18n(ttk.Label(populated_controls), "text", "lbl_km").pack(side="left", padx=(0, 12))
+        self._reg_i18n(ttk.Label(populated_controls), "text", "lbl_exclude_landing_legs").pack(side="left", padx=(0, 4))
+        self.settlements_exclude_legs_var = tk.StringVar(value="2")
+        ttk.Entry(populated_controls, textvariable=self.settlements_exclude_legs_var, width=4).pack(
+            side="left", padx=(0, 12),
+        )
         self.check_settlements_btn = ttk.Button(populated_controls, command=self._check_populated_areas)
         self._reg_i18n(self.check_settlements_btn, "text", "btn_check_settlements")
         self.check_settlements_btn.pack(side="left")
@@ -497,6 +504,22 @@ class AnalysisPageMixin:
         )
         self._reg_i18n(self.save_optimized_btn, "text", "btn_save_optimized_mission")
         self.save_optimized_btn.pack(side="left", padx=(6, 0))
+
+        # Якщо користувач ЗМІНЮЄ будь-яке з полів після успішної
+        # оптимізації -- це сигнал "хочу спробувати з іншими
+        # параметрами", тож "Оптимізувати" знову розблоковується.
+        # Профіль (opt_profile_var) теж входить -- вибір іншого
+        # профілю зі списку так само підставляє нові значення полів.
+        def _on_optimize_settings_changed(*_args):
+            if self.optimize_route_btn.cget("state") == "disabled":
+                self.optimize_route_btn.configure(state="normal")
+
+        for var in (
+            self.opt_tank_capacity_var, self.opt_cruise_consumption_var,
+            self.opt_cruise_speed_var, self.opt_roll_limit_var,
+            self.opt_exclude_legs_var, self.opt_profile_var,
+        ):
+            var.trace_add("write", _on_optimize_settings_changed)
 
         # підтягуємо крейсерську швидкість/витрату/крен з ПОТОЧНОГО
         # профілю літака (Конфігурація), якщо такий є -- користувачу не
@@ -1438,6 +1461,35 @@ class AnalysisPageMixin:
         self._refresh_glide_panel()
 
 
+    def _reset_analysis_result_caches(self):
+        """Скидає ВСІ кешовані результати «Обліт НП»/«Оптимізація»/вітру
+        уздовж маршруту -- викликається при завантаженні НОВОЇ місії
+        (mission_page._finish_load). БЕЗ цього ці результати лишались
+        від ПОПЕРЕДНЬОЇ місії й показувались на картах нової, поки
+        користувач не натисне відповідну кнопку ще раз -- реальний баг,
+        виявлений на практиці: стара карта видна одразу при заході на
+        «Аналіз» нової місії."""
+        self._settlements_cache = None
+        self._settlements_violations = []
+        self._route_optimization_result = None
+        self._route_wind_points = []
+        self._populated_areas_processed_legs = 0
+        if hasattr(self, "settlements_report_text"):
+            self.settlements_report_text.configure(state="normal")
+            self.settlements_report_text.delete("1.0", "end")
+            theme.make_text_readonly(self.settlements_report_text)
+        if hasattr(self, "optimize_report_text"):
+            self.optimize_report_text.configure(state="normal")
+            self.optimize_report_text.delete("1.0", "end")
+            theme.make_text_readonly(self.optimize_report_text)
+        if hasattr(self, "settlements_status_var"):
+            self.settlements_status_var.set("")
+        if hasattr(self, "optimize_status_var"):
+            self.optimize_status_var.set("")
+        if hasattr(self, "save_optimized_btn"):
+            self.save_optimized_btn.configure(state="disabled")
+
+
     def _ensure_analysis_built(self):
         """Лінива побудова важких елементів «Аналіз» (аналіз місії,
         графіки, карта маршруту) -- рахуються один раз, при першому
@@ -1734,7 +1786,21 @@ class AnalysisPageMixin:
             messagebox.showwarning(i18n.t("msg_weather_title"), i18n.t("msg_invalid_threshold_body"))
             return
 
-        wps = self.analyzer.nav_wps
+        try:
+            exclude_legs = int(self.settlements_exclude_legs_var.get())
+            if exclude_legs < 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning(i18n.t("msg_weather_title"), i18n.t("msg_invalid_threshold_body"))
+            return
+
+        # ті самі ребра зони посадки, що вже виключає "Оптимізація" --
+        # приліт до злітно-посадкової смуги біля НП часто неминучий і
+        # не є чимось, що можна чи треба "виправляти" вибором іншого
+        # шляху -- перевірка цих ребер лише плодить нерелевантний шум
+        all_wps = self.analyzer.nav_wps
+        n_optimizable = max(0, len(all_wps) - 1 - exclude_legs)
+        wps = all_wps[:n_optimizable + 1] if n_optimizable > 0 else all_wps
         lats = [wp.lat for wp in wps]
         lons = [wp.lon for wp in wps]
         lat_min, lat_max = min(lats), max(lats)
@@ -1772,17 +1838,25 @@ class AnalysisPageMixin:
 
         threading.Thread(
             target=self._populated_areas_worker,
-            args=(lat_min, lat_max, lon_min, lon_max, threshold_km),
+            args=(lat_min, lat_max, lon_min, lon_max, threshold_km, wps),
             daemon=True,
         ).start()
 
 
-    def _populated_areas_worker(self, lat_min, lat_max, lon_min, lon_max, threshold_km):
-        """Фоновий потік: запит Overpass API + розрахунок відстаней.
-        НІЯКОГО звернення до Tkinter напряму -- лише через self.after(0, ...)."""
+    def _populated_areas_worker(self, lat_min, lat_max, lon_min, lon_max, threshold_km, wps):
+        """Фоновий потік: запит шару заборонних зон (restricted_zones.py --
+        просторовий файловий кеш, мережа лише за дійсно нові клітинки)
+        + розрахунок відстаней. НІЯКОГО звернення до Tkinter напряму --
+        лише через self.after(0, ...)."""
         try:
-            settlements = populated_areas.fetch_settlements(lat_min, lat_max, lon_min, lon_max)
-            # settlements відомі одразу після ОДНОГО запиту -- виставляємо
+            settlements, all_covered = restricted_zones.get_settlements_for_bbox(
+                lat_min, lat_max, lon_min, lon_max,
+            )
+            if not all_covered:
+                self.after(0, lambda: self.settlements_status_var.set(
+                    i18n.t("status_zones_partial_coverage"),
+                ))
+            # settlements відомі одразу після запиту -- виставляємо
             # в кеш негайно, щоб карта могла почати малювати позначки ще
             # до завершення повного проходу по ребрах
             self.after(0, lambda: setattr(self, "_settlements_cache", settlements))
@@ -1791,7 +1865,7 @@ class AnalysisPageMixin:
                 self.after(0, lambda: self._on_populated_areas_progress(done, total, leg_violations))
 
             violations = populated_areas.check_route_settlement_distances(
-                self.analyzer.nav_wps, settlements, threshold_km=threshold_km,
+                wps, settlements, threshold_km=threshold_km,
                 progress_callback=on_progress,
             )
             self.after(0, lambda: self._on_populated_areas_ready(settlements, violations, threshold_km, None))
@@ -1883,11 +1957,12 @@ class AnalysisPageMixin:
 
     def _load_populated_areas_map(self):
         """Малює карту всього маршруту (той самий знімок _initial_map_render,
-        що й "Траєкторія") і зверху -- позначки населених пунктів,
-        кольорові за відстанню до найближчого відрізка маршруту:
-        червоний -- порушення порогу, жовтий -- близько (в межах 2х порогу),
-        зелений -- достатньо далеко. Якщо ще не було запиту (self.
-        _settlements_cache is None) -- малює тільки маршрут, без позначок."""
+        що й "Траєкторія") і зверху -- ЛИШЕ ті населені пункти, для яких
+        порушено умову безпечного обльоту (той самий список порушень,
+        що й у таблиці settlements_report_text, жодних додаткових
+        "майже безпечних" точок для контексту). Одне порушене село на
+        кількох сусідніх ребрах -- одна точка на карті (та сама фізична
+        точка), не кілька позначок в одному місці."""
         if self.analyzer is None or not hasattr(self, "populated_map_canvas"):
             return
 
@@ -1907,71 +1982,34 @@ class AnalysisPageMixin:
         )
         screen_origin_gx, screen_origin_gy = result[4], result[5]
 
-        settlements = self._settlements_cache
-        if not settlements:
+        violations = getattr(self, "_settlements_violations", None)
+        if not violations:
             return
 
-        try:
-            threshold_km = float(self.settlement_threshold_var.get().replace(",", "."))
-        except ValueError:
-            threshold_km = 1.0
+        # ОДНА точка на СЕЛО, не на порушення -- те саме село на кількох
+        # сусідніх ребрах не повинно давати кілька позначок в тому
+        # самому фізичному місці на карті
+        seen = {}
+        for v in violations:
+            s = v["settlement"]
+            key = (s["name"], s["lat"], s["lon"])
+            if key not in seen:
+                seen[key] = s
 
-        # ПРОГРЕСИВНІСТЬ: під час розрахунку (self._populated_areas_
-        # processed_legs < усіх ребер) враховуємо лише ВЖЕ перевірені
-        # ребра -- позначки на карті з'являються поступово, синхронно з
-        # прогресом, а не всі одразу в кінці. Після завершення (_on_
-        # populated_areas_ready) processed_legs виставляється на всю
-        # довжину -- останній виклик малює вже повну картину.
-        processed = getattr(self, "_populated_areas_processed_legs", None)
-        nav_wps_for_calc = (
-            self.analyzer.nav_wps[:processed + 1]
-            if processed is not None and processed < len(self.analyzer.nav_wps) - 1
-            else self.analyzer.nav_wps
-        )
-        min_dist = populated_areas.min_distance_per_settlement(nav_wps_for_calc, settlements)
-
-        # НЕ малюємо ВСІ знайдені населені пункти -- для довгих маршрутів
-        # (сотні км) Overpass може повернути тисячі точок, переважна
-        # більшість яких "безпечно далеко" й не несе жодної корисної
-        # інформації на карті (лише захаращує). Малюємо тільки ті, що в
-        # межах 3х порогу -- жовті/червоні позначки й невеликий запас
-        # "майже безпечних" зелених навколо них для контексту. Текстовий
-        # звіт (settlements_report_text) лишається ПОВНИМ списком
-        # порушень незалежно від цього фільтра -- фільтрується тільки
-        # візуальне навантаження на карту.
-        DRAW_RADIUS_MULT = 3.0
-        drawn = 0
-        for idx, s in enumerate(settlements):
-            d_m = min_dist.get(idx, float("inf"))
-            if d_m >= threshold_km * 1000 * DRAW_RADIUS_MULT:
-                continue
-
+        for s in seen.values():
             gx, gy = lonlat_to_pixel(s["lat"], s["lon"], zoom)
             x, y = gx - screen_origin_gx, gy - screen_origin_gy
-
-            if d_m < threshold_km * 1000:
-                color = "#e02020"    # порушення -- червоний
-            elif d_m < threshold_km * 2000:
-                color = "#e0a020"    # близько -- жовтий
-            else:
-                color = "#20a040"    # у межах запасу -- зелений
 
             r = 7 if s.get("place") in ("city", "town") else 5
             self.populated_map_canvas.create_oval(
                 x - r, y - r, x + r, y + r,
-                fill=color, outline="white", width=1,
+                fill="#e02020", outline="white", width=1,
                 tags=("settlement_marker",),
             )
             self.populated_map_canvas.create_text(
                 x, y - r - 8, text=s["name"], font=("Segoe UI", 8, "bold"),
                 fill="white", tags=("settlement_marker",),
             )
-            drawn += 1
-
-        if drawn < len(settlements):
-            self.settlements_status_var.set(i18n.t(
-                "status_settlements_shown_fmt", shown=drawn, total=len(settlements),
-            ))
 
     def _run_route_optimization(self):
         """Кнопка "Оптимізувати маршрут" -- валідація введених даних,
@@ -2026,11 +2064,18 @@ class AnalysisPageMixin:
         НІЯКОГО звернення до Tkinter напряму -- лише через self.after(0, ...)."""
         try:
             def fetcher(lat_min, lat_max, lon_min, lon_max):
-                # той самий margin_km, що й "Обліт НП" (populated_areas
-                # використовує 3.0 за замовчуванням) -- раніше тут явно
-                # стояло 2.0, через що Overpass міг повертати ІНШИЙ набір
-                # сіл, ніж "Обліт НП", навіть для того самого маршруту
-                return populated_areas.fetch_settlements(lat_min, lat_max, lon_min, lon_max)
+                # той самий шар заборонних зон, що й "Обліт НП"
+                # (restricted_zones.py) -- гарантовано той самий набір
+                # сіл для того самого маршруту, і мережа торкається лише
+                # дійсно нових ділянок, не всього bbox щоразу заново
+                settlements, all_covered = restricted_zones.get_settlements_for_bbox(
+                    lat_min, lat_max, lon_min, lon_max,
+                )
+                if not all_covered:
+                    self.after(0, lambda: self.optimize_status_var.set(
+                        i18n.t("status_zones_partial_coverage"),
+                    ))
+                return settlements
 
             def on_progress(done, total, leg_result):
                 self.after(0, lambda: self.optimize_status_var.set(
@@ -2062,9 +2107,13 @@ class AnalysisPageMixin:
 
 
     def _on_route_optimization_ready(self, result, error):
-        self.optimize_route_btn.configure(state="normal")
-
         if error:
+            # помилка -- РОЗБЛОКОВУЄМО "Оптимізувати" (нічого не вдалось,
+            # користувач має змогу спробувати ще раз, напр. після
+            # тимчасового мережевого збою). НЕ розблоковуємо при УСПІХУ
+            # (нижче) -- оптимізовану місію нема сенсу оптимізувати ще
+            # раз, доти, доки користувач сам не змінить якийсь параметр.
+            self.optimize_route_btn.configure(state="normal")
             self.optimize_status_var.set(i18n.t("status_settlements_error_fmt", error=error))
             # статус-рядок (ttk.Label) НЕ підтримує виділення мишею взагалі
             # -- дублюємо повний текст помилки в optimize_report_text, де
@@ -2117,6 +2166,16 @@ class AnalysisPageMixin:
                 lines.append(f"  {i18n.t('settlement_col_leg')} {lr.leg_index}: {lr.failure_reason}")
             lines.append("")
 
+        merged_legs = [lr for lr in result.legs if lr.merged_with_next]
+        if merged_legs:
+            lines.append(i18n.t("opt_merged_legs_header_fmt", n=len(merged_legs)))
+            for lr in merged_legs:
+                lines.append(i18n.t(
+                    "opt_merged_leg_line_fmt",
+                    leg1=lr.leg_index, leg2=lr.leg_index + 1, removed=lr.removed_waypoint_index,
+                ))
+            lines.append("")
+
         # --- таблиця "Було/Стало" по кожному НП -- пряме числове
         # підтвердження, що обхід реально спрацював: "було" (відстань
         # від ПРЯМОЇ лінії ребра) мала бути < порогу, "стало" (відстань
@@ -2130,7 +2189,12 @@ class AnalysisPageMixin:
             populated_areas._point_to_segment_m(
                 obs.lat, obs.lon,
                 self.analyzer.nav_wps[lr.leg_index].lat, self.analyzer.nav_wps[lr.leg_index].lon,
-                self.analyzer.nav_wps[lr.leg_index + 1].lat, self.analyzer.nav_wps[lr.leg_index + 1].lon,
+                self.analyzer.nav_wps[
+                    lr.removed_waypoint_index + 1 if lr.merged_with_next else lr.leg_index + 1
+                ].lat,
+                self.analyzer.nav_wps[
+                    lr.removed_waypoint_index + 1 if lr.merged_with_next else lr.leg_index + 1
+                ].lon,
             ) < threshold_m
             for lr in result.legs for obs in lr.obstacles_considered
         )
@@ -2155,7 +2219,8 @@ class AnalysisPageMixin:
                 if not lr.obstacles_considered:
                     continue
                 wp1 = self.analyzer.nav_wps[lr.leg_index]
-                wp2 = self.analyzer.nav_wps[lr.leg_index + 1]
+                end_index = lr.removed_waypoint_index + 1 if lr.merged_with_next else lr.leg_index + 1
+                wp2 = self.analyzer.nav_wps[end_index]
                 new_path = [(wp1.lat, wp1.lon)] + lr.inserted_waypoints + [(wp2.lat, wp2.lon)]
                 for obs in lr.obstacles_considered:
                     before_m = populated_areas._point_to_segment_m(
@@ -2281,8 +2346,16 @@ class AnalysisPageMixin:
         лінії між висотами кінців (польот на приблизно постійній висоті
         НАД рельєфом, а не по прямій між двома абсолютними висотами).
 
-        Повертає список Waypoint (command=NAV_WAYPOINT, frame=3 --
-        відносно home, як у більшості звичайних точок місії)."""
+        ВИПРАВЛЕНО (виявлено користувачем на практиці): розрахунок
+        коректно оперує ВІДНОСНИМИ (до рельєфу) висотами, але раніше
+        РЕЗУЛЬТАТ завжди записувався з жорстко заданим frame=3
+        (відносно точки зльоту) -- якщо ж уся решта місії була в
+        frame=0 (абсолютні AMSL-висоти), вставлені точки опинялись в
+        ІНШОМУ форматі кадру, ніж сусідні вейпоінти. Тепер цільовий
+        frame береться з wp1 (сусідній вейпоінт ребра), і абсолютна
+        висота конвертується САМЕ під нього -- та сама логіка
+        конверсії, що analyzer._absolute_alt() використовує для
+        ЗВОРОТНОГО напрямку (читання)."""
         analyzer = self.analyzer
         terrain = analyzer.terrain
 
@@ -2316,7 +2389,13 @@ class AnalysisPageMixin:
         elif terrain2 is not None:
             fallback_terrain = terrain2
 
+        # ЦІЛЬОВИЙ frame -- той самий, що в wp1 (сусідній справжній
+        # вейпоінт цього ребра), а НЕ жорстко заданий 3. Конверсія
+        # abs_alt -> wp.alt під конкретний frame -- дзеркальна до
+        # analyzer._absolute_alt() (там -- читання, тут -- запис).
+        target_frame = wp1.frame
         home_amsl = analyzer.home_amsl or 0.0
+
         result = []
         for lat, lon in inserted_points:
             try:
@@ -2326,20 +2405,42 @@ class AnalysisPageMixin:
                     raise ValueError(i18n.t("msg_no_terrain_for_leg_fmt", leg=""))
                 terrain_h = fallback_terrain
             abs_alt = terrain_h + avg_rel
-            alt_rel_home = abs_alt - home_amsl
+
+            if target_frame in (0, 2):
+                alt_for_frame = abs_alt  # frame 0/2 -- alt це вже AMSL напряму
+            elif target_frame == 10:
+                alt_for_frame = abs_alt - terrain_h  # frame 10 -- відносно рельєфу САМЕ під цією точкою
+            else:
+                alt_for_frame = abs_alt - home_amsl  # frame 3 і більшість інших -- відносно точки зльоту
+
             result.append(Waypoint(
-                index=0, current=0, frame=3, command=16,
+                index=0, current=0, frame=target_frame, command=16,
                 param1=0.0, param2=0.0, param3=0.0, param4=0.0,
-                lat=lat, lon=lon, alt=alt_rel_home, autocontinue=1,
+                lat=lat, lon=lon, alt=alt_for_frame, autocontinue=1,
             ))
         return result
 
 
-    def _build_optimized_waypoints(self) -> list:
+    def _build_optimized_waypoints(self) -> tuple[list, dict]:
         """Реконструює ПОВНИЙ список Waypoint (не тільки nav_wps) з
         вставленими точками обходу на правильних місцях -- зберігає всі
         інші елементи місії (home, зліт, DO_-команди тощо) на своїх
-        позиціях відносно навігаційних точок, як у оригінальному файлі."""
+        позиціях відносно навігаційних точок, як у оригінальному файлі.
+
+        Для ОБ'ЄДНАНИХ ребер (merged_with_next): вейпоінт МІЖ двома
+        об'єднаними ребрами дійсно ВИДАЛЯЄТЬСЯ з фінального маршруту (не
+        просто отримує вставлені точки ПЕРЕД собою, як було в
+        попередній версії -- реальний баг, видалена точка лишалась у
+        виводі). Будь-які НЕ-навігаційні команди, що стояли в оригіналі
+        БЕЗПОСЕРЕДНЬО біля цієї точки (до чи після), переносяться на
+        НАЙБЛИЖЧУ (за реальною географічною відстанню, не за порядком у
+        списку) нову точку обходу -- а не мовчки губляться.
+
+        Повертає (new_wps, summary) -- summary збирає ЛЮДСЬКИ читабельний
+        підсумок усіх таких "непомітних" змін (перенесені команди,
+        скориговані/перенаправлені DO_JUMP), щоб оператор бачив це явно
+        в звіті після збереження, а не дізнавався постфактум із
+        поведінки місії в польоті."""
         result_obj = self._route_optimization_result
         if result_obj is None:
             raise ValueError(i18n.t("msg_no_optimization_result"))
@@ -2347,28 +2448,146 @@ class AnalysisPageMixin:
         if analyzer.terrain is None:
             raise ValueError(i18n.t("msg_no_terrain_for_save"))
 
+        summary = {"relocated_commands": [], "jump_redirected": [], "jump_renumbered": 0}
+
         nav_wps = analyzer.nav_wps
         legs_by_index = {lr.leg_index: lr for lr in result_obj.legs}
+        all_wps = analyzer.all_wps
+
+        # nav_wps-індекс -> Waypoint-об'єкт, що ВИДАЛЯЄТЬСЯ через злиття
+        removed_wp_objects = {
+            lr.removed_waypoint_index: nav_wps[lr.removed_waypoint_index]
+            for lr in result_obj.legs if lr.merged_with_next
+        }
+        removed_wp_ids = {id(obj) for obj in removed_wp_objects.values()}
+
+        def _next_nav_point(from_idx: int):
+            """Найближча НАВІГАЦІЙНА точка (Waypoint), що йде ПІСЛЯ
+            all_wps[from_idx] у послідовності -- для перевірки, чи
+            команда стоїть БЕЗПОСЕРЕДНЬО перед видаленою точкою."""
+            for j in range(from_idx, len(all_wps)):
+                if all_wps[j].is_nav_point:
+                    return all_wps[j]
+            return None
 
         new_wps: list[Waypoint] = []
-        nav_counter = 0
+        nav_wps_position = 0  # позиція В nav_wps ДЛЯ ЦІЄЇ точки (рахує ВСІ, включно з видаленими)
+        last_real_nav_index = -1  # nav_wps-індекс ОСТАННЬОЇ РЕАЛЬНО збереженої точки (не рахує видалені)
+        pending_relocatable: list = []  # НЕ-нав команди, що стояли ПОРУЧ із видаленою точкою (до чи після)
+        just_passed_removed = False  # True одразу після пропущеної видаленої точки -- команди
+        # звідси й до НАСТУПНОЇ реальної нав-точки теж вважаються "поруч" і йдуть у relocatable
 
-        for wp in analyzer.all_wps:
+        for idx, wp in enumerate(all_wps):
             if wp.is_nav_point:
-                if nav_counter > 0:
-                    leg_idx = nav_counter - 1
+                if id(wp) in removed_wp_ids:
+                    # ЦЯ точка зникає з маршруту -- НЕ додаємо в new_wps.
+                    # pending_relocatable (команди, що йшли перед нею)
+                    # розберемо нижче, коли дійдемо до точок об'єднаного
+                    # обходу для цього злиття. Команди, що йдуть ПІСЛЯ
+                    # (до наступної реальної нав-точки) -- теж relocatable,
+                    # позначаємо прапорцем.
+                    just_passed_removed = True
+                    nav_wps_position += 1
+                    continue
+
+                just_passed_removed = False
+                if last_real_nav_index >= 0:
+                    # КЛЮЧОВЕ виправлення: leg_idx -- це індекс ОСТАННЬОЇ
+                    # реально збереженої точки (last_real_nav_index), НЕ
+                    # простий лічильник пройдених нав-точок. Якщо між
+                    # нею й ЦІЄЮ точкою була видалена (злиття) -- це
+                    # ОБ'ЄДНАНЕ ребро, а не звичайне "наступне".
+                    leg_idx = last_real_nav_index
                     leg_result = legs_by_index.get(leg_idx)
                     if leg_result and leg_result.inserted_waypoints:
                         wp1 = nav_wps[leg_idx]
-                        wp2 = nav_wps[leg_idx + 1]
+                        end_idx = (
+                            leg_result.removed_waypoint_index + 1
+                            if leg_result.merged_with_next else leg_idx + 1
+                        )
+                        wp2 = nav_wps[end_idx]
                         detour_wps = self._compute_detour_altitude(
                             wp1, wp2, leg_result.inserted_waypoints,
                         )
-                        new_wps.extend(detour_wps)
-                nav_counter += 1
-            new_wps.append(wp)
 
-        return new_wps
+                        if leg_result.merged_with_next and pending_relocatable:
+                            old_removed = removed_wp_objects[leg_result.removed_waypoint_index]
+                            nearest_i = min(
+                                range(len(detour_wps)),
+                                key=lambda i: haversine_m(
+                                    old_removed.lat, old_removed.lon,
+                                    detour_wps[i].lat, detour_wps[i].lon,
+                                ),
+                            )
+                            new_wps.extend(detour_wps[:nearest_i + 1])
+                            new_wps.extend(pending_relocatable)
+                            new_wps.extend(detour_wps[nearest_i + 1:])
+                            summary["relocated_commands"].append({
+                                "commands": [w.command for w in pending_relocatable],
+                                "old_waypoint_index": leg_result.removed_waypoint_index,
+                            })
+                            pending_relocatable = []
+                        else:
+                            new_wps.extend(detour_wps)
+                last_real_nav_index = nav_wps_position
+                nav_wps_position += 1
+                new_wps.append(wp)
+            else:
+                # НЕ-навігаційна команда. Relocatable, якщо стоїть
+                # БЕЗПОСЕРЕДНЬО ПЕРЕД видаленою точкою (наступна
+                # нав-точка попереду -- видалена) АБО ОДРАЗУ ПІСЛЯ неї
+                # (just_passed_removed) -- в обох випадках вона
+                # "прив'язана" саме до видаленої точки, не до жодної
+                # реальної, що лишається в маршруті.
+                next_nav = _next_nav_point(idx + 1)
+                is_before_removed = next_nav is not None and id(next_nav) in removed_wp_ids
+                if is_before_removed or just_passed_removed:
+                    pending_relocatable.append(wp)
+                else:
+                    new_wps.append(wp)
+
+        # --- Коригування DO_JUMP (177) ---
+        # param1 у DO_JUMP -- це ЦІЛЬОВИЙ НОМЕР (послідовний файловий
+        # індекс) вейпоінта для переходу. write_waypoints() ЗАВЖДИ
+        # перенумеровує послідовно від 0 при збереженні -- якщо десь
+        # раніше вставлені точки обходу (навіть без жодного злиття),
+        # усе, що йде ПІСЛЯ місця вставки, зсувається в номерах. БЕЗ
+        # цього коригування DO_JUMP мовчки почав би вказувати на
+        # ІНШИЙ, неправильний вейпоінт після збереження -- реальна
+        # навігаційна помилка, не просто косметика нумерації.
+        old_index_to_wp = {i: w for i, w in enumerate(all_wps)}
+        wp_id_to_new_index = {id(w): i for i, w in enumerate(new_wps)}
+        for i, wp in enumerate(new_wps):
+            if wp.command != 177:  # DO_JUMP
+                continue
+            old_target_index = int(wp.param1)
+            target_wp = old_index_to_wp.get(old_target_index)
+            if target_wp is None:
+                continue  # некоректний індекс уже в оригіналі -- не наша справа це виправляти
+            new_target_index = wp_id_to_new_index.get(id(target_wp))
+            if new_target_index is None:
+                # ціль сама зникла (видалена через злиття) -- перенаправляємо
+                # на геометрично НАЙБЛИЖЧУ точку серед тих, що лишились
+                if target_wp.has_position:
+                    candidates = [j for j, w in enumerate(new_wps) if w.has_position]
+                    if candidates:
+                        new_target_index = min(
+                            candidates,
+                            key=lambda j: haversine_m(
+                                target_wp.lat, target_wp.lon, new_wps[j].lat, new_wps[j].lon,
+                            ),
+                        )
+                if new_target_index is None:
+                    continue  # немає на що коректно перенаправити -- лишаємо як було, не гірше
+                summary["jump_redirected"].append({
+                    "old_target_index": old_target_index, "new_target_index": new_target_index,
+                })
+            else:
+                summary["jump_renumbered"] += 1
+            new_wps[i] = dataclasses.replace(wp, param1=float(new_target_index))
+
+        return new_wps, summary
+
 
 
     def _save_optimized_mission(self):
@@ -2379,7 +2598,7 @@ class AnalysisPageMixin:
             return
 
         try:
-            new_wps = self._build_optimized_waypoints()
+            new_wps, summary = self._build_optimized_waypoints()
         except ValueError as e:
             messagebox.showerror(i18n.t("msg_weather_title"), str(e))
             return
@@ -2405,6 +2624,30 @@ class AnalysisPageMixin:
             i18n.t("msg_weather_title"),
             i18n.t("msg_save_success_fmt", n=len(new_wps), path=path),
         )
+
+        # ЯВНИЙ підсумок "непомітних" змін -- перенесені команди й
+        # скориговані DO_JUMP -- дописується в ТОЙ САМИЙ звіт, де вже є
+        # таблиця "Було/Стало", щоб оператор бачив це одразу, а не
+        # дізнавався постфактум із поведінки місії в польоті.
+        if summary["relocated_commands"] or summary["jump_redirected"] or summary["jump_renumbered"]:
+            lines = ["", i18n.t("opt_save_changes_header")]
+            for item in summary["relocated_commands"]:
+                cmds = ", ".join(str(c) for c in item["commands"])
+                lines.append(i18n.t(
+                    "opt_relocated_commands_line_fmt",
+                    commands=cmds, waypoint=item["old_waypoint_index"],
+                ))
+            for item in summary["jump_redirected"]:
+                lines.append(i18n.t(
+                    "opt_jump_redirected_line_fmt",
+                    old=item["old_target_index"], new=item["new_target_index"],
+                ))
+            if summary["jump_renumbered"]:
+                lines.append(i18n.t("opt_jump_renumbered_line_fmt", n=summary["jump_renumbered"]))
+
+            self.optimize_report_text.configure(state="normal")
+            self.optimize_report_text.insert("end", "\n" + "\n".join(lines))
+            theme.make_text_readonly(self.optimize_report_text)
 
     def _apply_profile_to_optimization_fields(self, profile):
         """Заповнює крейсерську швидкість/витрату/крен зі СПЕЦИФІЧНОГО
