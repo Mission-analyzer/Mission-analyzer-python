@@ -52,7 +52,7 @@ APP_NAME = f"MissionAnalyzerV{meta.VERSION.replace('.', '')}"
 # icon.ico) -- як і в самому App.ICON_CANDIDATES у app.py. Додаємо в
 # збірку все, що реально знайшлося, замість того щоб жорстко
 # прописувати одну назву і впасти, якщо файл називається інакше.
-_ASSET_CANDIDATES = ("icon.png", "logo.png", "icon.ico", "logo.ico", "aircraft_profiles_seed.json")
+_ASSET_CANDIDATES = ("icon.png", "logo.png", "icon.ico", "logo.ico", "aircraft_profiles_seed.json", "route_types_seed.json")
 datas = [
     (os.path.join(PROJECT_DIR, name), ".")
     for name in _ASSET_CANDIDATES

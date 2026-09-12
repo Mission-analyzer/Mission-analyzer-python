@@ -846,7 +846,7 @@ class ArduPilotLinkMixin:
         hud_frame = tk.Frame(dlg, bg="#111111")
         hud_frame.pack(fill="x", padx=8, pady=(8, 4))
 
-        HUD_W, HUD_H = 300, 170
+        HUD_W, HUD_H = 300, 195  # +25px під стрічку курсу знизу (компас)
         hud_canvas = tk.Canvas(
             hud_frame, width=HUD_W, height=HUD_H,
             bg="#1a3a5a", highlightthickness=1, highlightbackground="#333",
@@ -863,8 +863,10 @@ class ArduPilotLinkMixin:
         pitch_var = tk.StringVar(value="PITCH: ---")
         alt_var   = tk.StringVar(value="ALT:   ---")
         temp_var  = tk.StringVar(value="TEMP:  ---")
+        gspd_var  = tk.StringVar(value="GSPD:  ---")
+        climb_var = tk.StringVar(value="CLIMB: ---")
 
-        for var in (roll_var, pitch_var, alt_var, temp_var):
+        for var in (roll_var, pitch_var, alt_var, gspd_var, climb_var, temp_var):
             tk.Label(data_frame, textvariable=var, bg=_DATA_BG, fg=_DATA_FG,
                      font=_DATA_FONT, anchor="w").pack(anchor="w", pady=3)
 
@@ -880,7 +882,8 @@ class ArduPilotLinkMixin:
         theme.make_text_readonly(text)
 
         # --- Старт живого потоку телеметрії ---
-        self._hud_state = {"roll": 0.0, "pitch": 0.0, "alt": 0.0, "active": True}
+        self._hud_state = {"roll": 0.0, "pitch": 0.0, "alt": 0.0, "heading": 0.0,
+                            "groundspeed": 0.0, "climb": 0.0, "active": True}
         self._start_hud_telemetry()
 
         def _update_hud():
@@ -890,10 +893,15 @@ class ArduPilotLinkMixin:
             roll_r  = s.get("roll", 0.0)
             pitch_r = s.get("pitch", 0.0)
             alt     = s.get("alt", 0.0)
-            self._draw_artificial_horizon(hud_canvas, roll_r, pitch_r)
+            heading = s.get("heading", 0.0)
+            gspd    = s.get("groundspeed", 0.0)
+            climb   = s.get("climb", 0.0)
+            self._draw_artificial_horizon(hud_canvas, roll_r, pitch_r, heading)
             roll_var.set(f"ROLL:  {math.degrees(roll_r):+.1f}°")
             pitch_var.set(f"PITCH: {math.degrees(pitch_r):+.1f}°")
             alt_var.set(f"ALT:   {alt:.1f} м")
+            gspd_var.set(f"GSPD:  {gspd:.1f} м/с")
+            climb_var.set(f"CLIMB: {climb:+.1f} м/с")
             dlg.after(100, _update_hud)
 
         dlg.after(200, _update_hud)
@@ -901,10 +909,13 @@ class ArduPilotLinkMixin:
 
 
     @staticmethod
-    def _draw_artificial_horizon(canvas: tk.Canvas, roll_rad: float, pitch_rad: float):
-        """Малює мінімальний штучний горизонт (крен/тангаж) на Canvas.
-        Небо -- синє, земля -- коричнева, лінія горизонту -- біла.
-        Координати canvas: x -- праворуч, y -- вниз (стандарт Tkinter)."""
+    def _draw_artificial_horizon(canvas: tk.Canvas, roll_rad: float, pitch_rad: float, heading_deg: float = 0.0):
+        """Малює мінімальний штучний горизонт (крен/тангаж) на Canvas,
+        плюс стрічку курсу (компас) знизу -- ЗА ПРЯМОЮ ВКАЗІВКОЮ
+        користувача: дані heading вже надходили в потоці VFR_HUD, але
+        компас не малювався взагалі. Небо -- синє, земля -- коричнева,
+        лінія горизонту -- біла. Координати canvas: x -- праворуч,
+        y -- вниз (стандарт Tkinter)."""
         W = canvas.winfo_width()  or int(canvas.cget("width"))
         H = canvas.winfo_height() or int(canvas.cget("height"))
         cx, cy = W / 2, H / 2
@@ -986,6 +997,32 @@ class ArduPilotLinkMixin:
         tb2y = cy - (tri_r + 10) * math.cos(a + math.radians(5))
         canvas.create_polygon([tx, ty, tb1x, tb1y, tb2x, tb2y], fill="white", outline="")
 
+        # стрічка курсу (компас) -- горизонтальна смуга внизу HUD,
+        # поточний курс завжди в центрі, позначки кожні 10°, підписані
+        # кожні 30° (і сторони світу N/E/S/W на відповідних значеннях)
+        tape_h = 22
+        tape_y0 = H - tape_h
+        canvas.create_rectangle(0, tape_y0, W, H, fill="#000000", outline="#333333")
+        PX_PER_DEG_HDG = 4.0
+        deg_visible = (W / 2) / PX_PER_DEG_HDG
+        start_deg = int(heading_deg - deg_visible) - 1
+        end_deg = int(heading_deg + deg_visible) + 1
+        for d in range(start_deg, end_deg + 1):
+            deg_norm = d % 360
+            x = cx + (d - heading_deg) * PX_PER_DEG_HDG
+            if deg_norm % 30 == 0:
+                label = {0: "N", 90: "E", 180: "S", 270: "W"}.get(deg_norm, str(deg_norm))
+                canvas.create_line(x, tape_y0, x, tape_y0 + 10, fill="#00ff88", width=2)
+                canvas.create_text(x, tape_y0 + 15, text=label, fill="#00ff88",
+                                    font=("Consolas", 9, "bold"), anchor="n")
+            elif deg_norm % 10 == 0:
+                canvas.create_line(x, tape_y0, x, tape_y0 + 6, fill="#888888", width=1)
+        # нерухомий трикутник-покажчик поточного курсу в центрі стрічки
+        canvas.create_polygon(cx - 5, tape_y0 - 1, cx + 5, tape_y0 - 1, cx, tape_y0 + 6,
+                               fill="#ffcc00", outline="")
+        canvas.create_text(cx, tape_y0 - 3, text=f"{heading_deg:03.0f}°", fill="#ffcc00",
+                            font=("Consolas", 10, "bold"), anchor="s")
+
         # нерухомий символ ПС (центральний хрест -- фіксований, не обертається)
         canvas.create_line(cx - 38, cy, cx - 10, cy, fill="#FFD700", width=3)
         canvas.create_line(cx + 10, cy, cx + 38, cy, fill="#FFD700", width=3)
@@ -1052,6 +1089,12 @@ class ArduPilotLinkMixin:
                 self._hud_state["pitch"] = msg.pitch
             elif t == "VFR_HUD":
                 self._hud_state["alt"] = msg.alt
+                # VFR_HUD вже містить ці поля -- ЗА ПРЯМОЮ ВКАЗІВКОЮ
+                # користувача (компас не показувався, хоча дані вже
+                # надходили в потоці, просто не читались і не малювались).
+                self._hud_state["heading"] = msg.heading
+                self._hud_state["groundspeed"] = msg.groundspeed
+                self._hud_state["climb"] = msg.climb
 
 
     def _load_mission_from_mavlink(self):

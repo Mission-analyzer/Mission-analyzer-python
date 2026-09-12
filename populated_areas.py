@@ -234,12 +234,20 @@ def fetch_settlements(lat_min: float, lat_max: float, lon_min: float, lon_max: f
 
 
 def check_route_settlement_distances(nav_wps: list, settlements: list[dict],
-                                      threshold_km: float = 1.0, progress_callback=None) -> list[dict]:
+                                      radius_lookup, progress_callback=None) -> list[dict]:
     """Для кожного відрізка маршруту (пари сусідніх навігаційних точок)
     рахує мінімальну відстань до кожного населеного пункту зі списку.
 
-    Повертає список ТІЛЬКИ порушень (де min_distance_m < threshold_km*1000),
-    відсортований за зростанням відстані (найкритичніші -- перші):
+    radius_lookup -- callable(population: float | None) -> float (км),
+    ЗА ПРЯМОЮ ВКАЗІВКОЮ користувача: та сама логіка, що й у route_
+    optimizer.py -- радіус ЗАЛЕЖИТЬ ВІД НАСЕЛЕННЯ конкретного НП
+    (route_type.radius_for_population), замінює колишній єдиний
+    threshold_km. Одна наскрізна логіка для обох місць, де вона
+    використовується.
+
+    Повертає список ТІЛЬКИ порушень (де min_distance_m < власного
+    радіуса ЦЬОГО НП), відсортований за зростанням відстані
+    (найкритичніші -- перші):
         [{"settlement": dict, "leg_index": int,
           "wp1_index": int, "wp2_index": int, "distance_m": float}, ...]
 
@@ -251,7 +259,6 @@ def check_route_settlement_distances(nav_wps: list, settlements: list[dict],
     оновлювати UI/карту, не чекаючи завершення розрахунку по ВСЬОМУ
     маршруту (корисно для довгих маршрутів із сотнями населених
     пунктів, де сам розрахунок відстаней помітно триває)."""
-    threshold_m = threshold_km * 1000.0
     violations = []
     n_legs = len(nav_wps) - 1
 
@@ -260,7 +267,7 @@ def check_route_settlement_distances(nav_wps: list, settlements: list[dict],
         leg_violations = []
         for s in settlements:
             d = _point_to_segment_m(s["lat"], s["lon"], wp1.lat, wp1.lon, wp2.lat, wp2.lon)
-            if d < threshold_m:
+            if d < radius_lookup(s.get("population")) * 1000.0:
                 v = {
                     "settlement": s,
                     "leg_index": i,

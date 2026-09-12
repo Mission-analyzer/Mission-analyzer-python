@@ -235,3 +235,142 @@ def draw_takeoff_profile(
         canvas, analyzer, step_m=step_m, max_dist_m=max_dist,
         title="Профіль висоти — зліт", show_angles=True, dark=dark,
     )
+
+
+def draw_altitude_before_after(
+    canvas: tk.Canvas,
+    dist_km_before: list, alt_before: list,
+    dist_km_after: list, alt_after: list,
+    crossing_km: float | None = None,
+    terrain_dist_km: list | None = None, terrain_alt: list | None = None,
+    dark: bool = False,
+    bottleneck_km: float | None = None,
+):
+    """Графік висотного профілю "Було/Стало" (окремо від draw_
+    elevation_profile -- та функція жорстко прив'язана до MissionAnalyzer
+    і рахує ОДИН профіль, тут -- ДВА незалежні профілі з різними
+    відстанями/точками, порівнюються на спільній осі відстані).
+
+    УСІ висоти тут -- АБСОЛЮТНІ (AMSL), НЕ відносні (AGL) -- та сама
+    умовність, що вже в draw_elevation_profile, щоб рельєф і профіль
+    польоту були на одній осі й порівнювались візуально напряму
+    (відносна висота сама по собі не показує, наскільки безпечно
+    виглядає профіль щодо реального рельєфу під ним).
+
+    dist_km_before/alt_before -- профіль ДО оптимізації висоти (ті самі
+    точки, що були, з їхньою оригінальною висотою). dist_km_after/
+    alt_after -- профіль ПІСЛЯ (з урахуванням нових/видалених точок).
+    terrain_dist_km/terrain_alt -- профіль рельєфу (той самий формат,
+    зазвичай -- ті самі точки, що й "було", бо рельєф не змінюється).
+    crossing_km -- відстань до лінії розмежування (вертикальний
+    маркер), None якщо перетину немає. bottleneck_km -- відстань до
+    точки НАЙГІРШОГО кліренсу НА ЦЕЙ момент (ЗА ПРЯМОЮ ВКАЗІВКОЮ
+    користувача: показувати в реальному часі, не тільки в кінці) --
+    окремий маркер, іншим кольором за crossing_km, щоб не плутати."""
+    canvas.delete("all")
+    c = _colors(dark)
+    width = max(canvas.winfo_width(), 200)
+    height = max(canvas.winfo_height(), 150)
+
+    if not dist_km_before and not dist_km_after:
+        return
+
+    margin_l, margin_r, margin_t, margin_b = 55, 15, 30, 42
+    plot_w = max(width - margin_l - margin_r, 10)
+    plot_h = max(height - margin_t - margin_b, 10)
+
+    terrain_dist_km = terrain_dist_km or []
+    terrain_alt = terrain_alt or []
+    all_dist = dist_km_before + dist_km_after + terrain_dist_km
+    all_alt = alt_before + alt_after + terrain_alt
+    max_dist = max(all_dist) if all_dist else 1.0
+    min_alt = min(all_alt) if all_alt else 0.0
+    max_alt = max(all_alt) if all_alt else 100.0
+    alt_range = max(max_alt - min_alt, 1.0)
+    alt_pad = alt_range * 0.1
+    min_alt -= alt_pad
+    max_alt += alt_pad
+
+    def x_of(dist_km_val):
+        return margin_l + (dist_km_val / max_dist if max_dist > 0 else 0) * plot_w
+
+    def y_of(alt_val):
+        return margin_t + plot_h - (alt_val - min_alt) / (max_alt - min_alt) * plot_h
+
+    # сітка й осі -- той самий мінімалістичний стиль, що й draw_elevation_profile
+    n_y_ticks = 5
+    for i in range(n_y_ticks + 1):
+        alt_val = min_alt + (max_alt - min_alt) * i / n_y_ticks
+        y = y_of(alt_val)
+        canvas.create_line(margin_l, y, margin_l + plot_w, y, fill=c["grid_y"])
+        canvas.create_text(margin_l - 6, y, text=f"{alt_val:.0f}", anchor="e", fill=c["text"], font=("Segoe UI", 8))
+
+    n_x_ticks = 5
+    for i in range(n_x_ticks + 1):
+        dist_val = max_dist * i / n_x_ticks
+        x = x_of(dist_val)
+        canvas.create_line(x, margin_t, x, margin_t + plot_h, fill=c["grid_x"])
+        canvas.create_text(x, margin_t + plot_h + 8, text=f"{dist_val:.1f}", anchor="n", fill=c["text"], font=("Segoe UI", 8))
+
+    canvas.create_text(
+        margin_l + plot_w / 2, height - 10, text=i18n.t("altitude_chart_x_label"),
+        fill=c["text"], font=("Segoe UI", 8),
+    )
+    canvas.create_text(
+        14, margin_t + plot_h / 2, text=i18n.t("altitude_chart_y_label"),
+        fill=c["text"], font=("Segoe UI", 8), angle=90,
+    )
+
+    # вертикальний маркер лінії розмежування
+    if crossing_km is not None:
+        x = x_of(crossing_km)
+        canvas.create_line(
+            x, margin_t, x, margin_t + plot_h, fill=c["angle_dash"], dash=(4, 3), width=1,
+        )
+        canvas.create_text(
+            x, margin_t - 4, text=i18n.t("altitude_chart_crossing_label"),
+            fill=c["angle_dash"], font=("Segoe UI", 8), anchor="s",
+        )
+
+    # вертикальний маркер найгіршого кліренсу НА ЦЕЙ момент -- окремий
+    # колір (жовтогарячий), щоб відрізнити від переходу кордону
+    if bottleneck_km is not None:
+        x = x_of(bottleneck_km)
+        canvas.create_line(
+            x, margin_t, x, margin_t + plot_h, fill="#ff9500", dash=(2, 2), width=1,
+        )
+        canvas.create_text(
+            x, margin_t + plot_h + 4, text=i18n.t("altitude_chart_bottleneck_label"),
+            fill="#ff9500", font=("Segoe UI", 8), anchor="n",
+        )
+
+    def draw_line(dist_list, alt_list, color, width_px, dash=None):
+        if len(dist_list) < 2:
+            return
+        coords = []
+        for d, a in zip(dist_list, alt_list):
+            coords.extend([x_of(d), y_of(a)])
+        kwargs = {"fill": color, "width": width_px, "smooth": False}
+        if dash:
+            kwargs["dash"] = dash
+        canvas.create_line(*coords, **kwargs)
+
+    # Рельєф -- малюється ПЕРШИМ (під лініями "Було/Стало"), той самий
+    # колір, що й на графіку "Маршрут" (theme.chart_colors, узгоджено
+    # по всьому проєкту).
+    draw_line(terrain_dist_km, terrain_alt, c["terrain_line"], 2)
+
+    # "Було" -- приглушений колір, пунктир (та сама умовність, що
+    # crosswind/попереджувальні елементи по всьому проєкту: пунктир =
+    # довідково/минуле, суцільна лінія = актуальне)
+    draw_line(dist_km_before, alt_before, c["angle_dash"], 2, dash=(5, 3))
+    draw_line(dist_km_after, alt_after, c["mission_line"], 2)
+
+    legend_y = margin_t + 4
+    canvas.create_line(margin_l + 8, legend_y, margin_l + 28, legend_y, fill=c["angle_dash"], width=2, dash=(5, 3))
+    canvas.create_text(margin_l + 32, legend_y, text=i18n.t("altitude_chart_legend_before"), anchor="w", fill=c["text"], font=("Segoe UI", 8))
+    canvas.create_line(margin_l + 140, legend_y, margin_l + 160, legend_y, fill=c["mission_line"], width=2)
+    canvas.create_text(margin_l + 164, legend_y, text=i18n.t("altitude_chart_legend_after"), anchor="w", fill=c["text"], font=("Segoe UI", 8))
+    canvas.create_line(margin_l + 270, legend_y, margin_l + 290, legend_y, fill=c["terrain_line"], width=2)
+    canvas.create_text(margin_l + 294, legend_y, text=i18n.t("altitude_chart_legend_terrain"), anchor="w", fill=c["text"], font=("Segoe UI", 8))
+

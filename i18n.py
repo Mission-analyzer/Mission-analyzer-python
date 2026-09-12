@@ -30,6 +30,7 @@ _TR: dict[str, dict[str, str]] = {
     # --- навигационные кнопки (иконка + подпись) ---
     "nav_mission": {"uk": "Місія", "en": "Mission"},
     "nav_analysis": {"uk": "Аналіз", "en": "Analysis"},
+    "nav_optimization": {"uk": "Оптимізація", "en": "Optimization"},
     "nav_config": {"uk": "Конфігурація", "en": "Configuration"},
     "nav_help": {"uk": "Довідка", "en": "Help"},
     "tab_help": {"uk": "Довідка", "en": "Help"},
@@ -175,6 +176,7 @@ _TR: dict[str, dict[str, str]] = {
     },
     "label_alt_min": {"uk": "Мін. висота, м:", "en": "Min altitude, m:"},
     "label_turn_min": {"uk": "Мін. кут повороту, °:", "en": "Min turn angle, °:"},
+    "label_angle_max": {"uk": "Макс. кут нахилу траєкторії, °:", "en": "Max flight path angle, °:"},
     "check_srtm": {"uk": "Рельєф (SRTM)", "en": "Terrain (SRTM)"},
     "label_map_cache": {"uk": "Диск-кеш карти (необов'язково):", "en": "Map disk cache (optional):"},
     "btn_analyze": {"uk": "Аналізувати", "en": "Analyze"},
@@ -195,6 +197,7 @@ _TR: dict[str, dict[str, str]] = {
     "table_col_frame": {"uk": "Фрейм", "en": "Frame"},
     "table_col_dist": {"uk": "Відст, м", "en": "Dist, m"},
     "table_col_az": {"uk": "AZ, °", "en": "AZ, °"},
+    "table_col_angle": {"uk": "Кут, °", "en": "Angle, °"},
     "status_loaded_fmt": {
         "uk": "Завантажено: {n} точок маршруту",
         "en": "Loaded: {n} route points",
@@ -491,6 +494,142 @@ _TR: dict[str, dict[str, str]] = {
     "tab_landing_phase": {"uk": "Посадка", "en": "Landing"},
     "tab_populated_areas": {"uk": "Обліт НП", "en": "Settlements"},
     "tab_route_optimization": {"uk": "Оптимізація", "en": "Optimization"},
+    "tab_optimization_coordinates": {"uk": "Координати", "en": "Coordinates"},
+    "tab_altitude_optimization": {"uk": "Висота", "en": "Altitude"},
+    "hint_altitude_uses_coordinate_result": {
+        "uk": (
+            "Оптимізація висоти будується ПОВЕРХ уже готового результату "
+            "вкладки «Координати» -- спершу обхід заборонних зон, потім "
+            "висотний профіль (тому кнопка й розташована праворуч). "
+            "Плавний перехід між цільовими висотами контрольованої й "
+            "окупованої території (див. «Тип маршруту» в Конфігурації) "
+            "починається заздалегідь, ще до самої лінії розмежування."
+        ),
+        "en": (
+            "Altitude optimization builds ON TOP of the already-computed "
+            "\"Coordinates\" result -- coordinates first, then the altitude "
+            "profile (hence the button sitting to its right). The smooth "
+            "transition between target altitudes for controlled and "
+            "occupied territory (see \"Route type\" in Configuration) "
+            "starts in advance, before the actual line-of-control crossing."
+        ),
+    },
+    "btn_optimize_altitude": {"uk": "Оптимізувати висоту", "en": "Optimize altitude"},
+    "chk_altitude_step_mode": {"uk": "Покроковий режим", "en": "Step-by-step mode"},
+    "btn_altitude_step_next": {"uk": "Далі (пробіл)", "en": "Next (space)"},
+    "btn_altitude_cancel": {"uk": "Скасувати", "en": "Cancel"},
+    "status_altitude_optimization_running": {"uk": "Оптимізація висоти виконується...", "en": "Optimizing altitude..."},
+    "status_altitude_step_fmt": {
+        "uk": "Ітерація {n}: мінімальний кліренс {clearance} -- натисни «Далі» чи пробіл",
+        "en": "Iteration {n}: minimum clearance {clearance} -- press \"Next\" or space",
+    },
+    "status_altitude_progress_fmt": {
+        "uk": "Ітерація {n}: мінімальний кліренс {clearance}",
+        "en": "Iteration {n}: minimum clearance {clearance}",
+    },
+    "box_altitude_report": {"uk": "Звіт про оптимізацію висоти", "en": "Altitude optimization report"},
+    "box_altitude_chart": {"uk": "Графік висоти: було/стало", "en": "Altitude chart: before/after"},
+    "box_altitude_angle_chart": {"uk": "Графік кута нахилу ребер", "en": "Edge slope angle chart"},
+    "altitude_angle_chart_empty": {"uk": "Немає даних про кути", "en": "No angle data"},
+    "altitude_angle_legend_ok": {"uk": "У межах ліміту", "en": "Within limit"},
+    "altitude_angle_legend_exceeded": {"uk": "Перевищено", "en": "Exceeded"},
+    "altitude_angle_legend_limit": {"uk": "ліміт (профіль)", "en": "limit (profile)"},
+    "altitude_chart_x_label": {"uk": "Відстань, км", "en": "Distance, km"},
+    "altitude_chart_y_label": {"uk": "Висота, м", "en": "Altitude, m"},
+    "altitude_chart_crossing_label": {"uk": "державний кордон", "en": "state border"},
+    "altitude_chart_bottleneck_label": {"uk": "найгірший кліренс", "en": "worst clearance"},
+    "altitude_chart_legend_before": {"uk": "Було", "en": "Before"},
+    "altitude_chart_legend_after": {"uk": "Стало", "en": "After"},
+    "altitude_chart_legend_terrain": {"uk": "Рельєф", "en": "Terrain"},
+    "msg_run_coordinate_optimization_first": {
+        "uk": "Спершу запустіть оптимізацію по координатах (вкладка «Координати»)",
+        "en": "Run coordinate optimization first (\"Coordinates\" tab)",
+    },
+    "msg_no_route_type": {
+        "uk": "Оберіть тип маршруту (Конфігурація)",
+        "en": "Select a route type (Configuration)",
+    },
+    "msg_border_maneuver_unachievable": {
+        "uk": "Маршрут закороткий для маневру переходу кордону з заданим кутом -- див. звіт",
+        "en": "Route too short for the border-crossing maneuver at the configured angle -- see report",
+    },
+    "msg_no_occupied_data": {
+        "uk": "Не вдалось отримати дані про державний кордон (Natural Earth)",
+        "en": "Could not fetch state border data (Natural Earth)",
+    },
+    "status_no_line_crossing": {
+        "uk": "Маршрут не перетинає лінію розмежування -- оптимізація висоти не потрібна",
+        "en": "Route does not cross the line of control -- altitude optimization not needed",
+    },
+    "status_altitude_maneuver_unachievable": {
+        "uk": "Маршрут закороткий для плавного маневру висоти -- див. звіт",
+        "en": "Route too short for a smooth altitude maneuver -- see report",
+    },
+    "status_altitude_optimization_done": {"uk": "Оптимізацію висоти завершено", "en": "Altitude optimization done"},
+    "status_altitude_optimization_error": {"uk": "Помилка під час оптимізації висоти", "en": "Error during altitude optimization"},
+    "msg_unexpected_error_title": {"uk": "Неочікувана помилка", "en": "Unexpected error"},
+    "msg_unexpected_error_body": {
+        "uk": "У програмі сталась неочікувана помилка. Деталі нижче -- скопіюй і надішли розробнику:",
+        "en": "An unexpected error occurred. Details below -- copy and send to the developer:",
+    },
+    "status_altitude_single_zone_done": {
+        "uk": "Маршрут повністю в одній зоні -- висоту скориговано на ціль цієї зони",
+        "en": "Route entirely within one zone -- altitude adjusted to that zone's target",
+    },
+    "altitude_report_header": {"uk": "Результати оптимізації висоти", "en": "Altitude optimization results"},
+    "altitude_debug_route_bbox_fmt": {
+        "uk": "Межі маршруту: lat {lat_min:.4f}..{lat_max:.4f}, lon {lon_min:.4f}..{lon_max:.4f}",
+        "en": "Route bounds: lat {lat_min:.4f}..{lat_max:.4f}, lon {lon_min:.4f}..{lon_max:.4f}",
+    },
+    "altitude_debug_n_polygons_fmt": {
+        "uk": "Отримано шматків полігону державного кордону: {n}",
+        "en": "State border polygon pieces fetched: {n}",
+    },
+    "altitude_debug_polygon_bbox_fmt": {
+        "uk": "Межі полігону: lat {lat_min:.4f}..{lat_max:.4f}, lon {lon_min:.4f}..{lon_max:.4f}",
+        "en": "Polygon bounds: lat {lat_min:.4f}..{lat_max:.4f}, lon {lon_min:.4f}..{lon_max:.4f}",
+    },
+    "altitude_debug_n_inside_fmt": {
+        "uk": "Точок маршруту ВСЕРЕДИНІ полігону: {n} з {total}",
+        "en": "Route points INSIDE the polygon: {n} of {total}",
+    },
+    "altitude_report_maneuver_fmt": {
+        "uk": "Маневр: {before:.0f}м до лінії, {after:.0f}м після лінії",
+        "en": "Maneuver: {before:.0f}m before the line, {after:.0f}m after",
+    },
+    "altitude_report_rate_check_fmt": {
+        "uk": "Фактичний темп (перевірено за реальною геометрією): {before:.2f}м/с до, {after:.2f}м/с після",
+        "en": "Actual rate (verified against real geometry): {before:.2f}m/s before, {after:.2f}m/s after",
+    },
+    "altitude_report_rate_exceeded_warning": {
+        "uk": "⚠ УВАГА: фактичний темп перевищує ліміт профілю літака -- маневр може бути фізично нездійсненним",
+        "en": "⚠ WARNING: actual rate exceeds the aircraft profile's limit -- the maneuver may not be physically achievable",
+    },
+    "status_altitude_rate_exceeded": {
+        "uk": "Готово, АЛЕ фактичний темп перевищує ліміт -- див. звіт",
+        "en": "Done, BUT actual rate exceeds the limit -- see report",
+    },
+    "altitude_report_before_after_header": {"uk": "Було / стало:", "en": "Before / after:"},
+    "altitude_report_summary_fmt": {
+        "uk": "Нових точок: {new}, видалено точок: {removed}",
+        "en": "New points: {new}, removed points: {removed}",
+    },
+    "altitude_report_terrain_fixes_fmt": {
+        "uk": "⚠ Додано {n} точок для безпечного кліренсу над рельєфом (виявлено недостатній запас між точками зони)",
+        "en": "⚠ Added {n} points for safe terrain clearance (insufficient margin found between zone points)",
+    },
+    "altitude_report_simple_summary_fmt": {
+        "uk": "Перетин кордону: {crossing}. Піднято цільових висот: {raised}. Додано нових точок: {new}",
+        "en": "Border crossing: {crossing}. Raised targets: {raised}. New points added: {new}",
+    },
+    "altitude_phase3_gain_fmt": {
+        "uk": "Прилягання до рельєфу (Фаза 3): середній надлишок кліренсу {before}м -> {after}м (виграш {gain}м)",
+        "en": "Terrain-hugging (Phase 3): average excess clearance {before}m -> {after}m (gain {gain}m)",
+    },
+    "altitude_clearance_log_header": {
+        "uk": "Мінімальний кліренс перед кожною ітерацією:",
+        "en": "Minimum clearance before each iteration:",
+    },
 
     # --- Профілі літака (aircraft_profiles.py) ---
     "box_aircraft_profiles": {"uk": "Профілі літака", "en": "Aircraft profiles"},
@@ -505,6 +644,45 @@ _TR: dict[str, dict[str, str]] = {
     "lbl_sink_rate_min": {"uk": "Мін. швидкість зниження:", "en": "Min sink rate:"},
     "lbl_climb_rate_max": {"uk": "Макс. швидкість набору:", "en": "Max climb rate:"},
     "lbl_landing_airspeed": {"uk": "Швидкість заходу на посадку:", "en": "Landing approach speed:"},
+
+    "box_route_types": {"uk": "Тип маршруту", "en": "Route type"},
+    "lbl_route_type_name": {"uk": "Назва типу:", "en": "Type name:"},
+    "lbl_alt_controlled": {
+        "uk": "Відносна висота над контрольованою територією:",
+        "en": "Relative altitude over controlled territory:",
+    },
+    "lbl_alt_occupied": {
+        "uk": "Відносна висота над окупованою територією:",
+        "en": "Relative altitude over occupied territory:",
+    },
+    "lbl_alt_border_crossing": {
+        "uk": "Висота перетину лінії розмежування:",
+        "en": "Altitude at line-of-control crossing:",
+    },
+    "lbl_max_waypoints": {
+        "uk": "Макс. точок для оптимізації висоти:",
+        "en": "Max waypoints for altitude optimization:",
+    },
+    "lbl_border_maneuver_angle": {
+        "uk": "Кут маневру переходу кордону:",
+        "en": "Border crossing maneuver angle:",
+    },
+    "lbl_population_radii": {
+        "uk": "Радіус обльоту НП залежно від населення:",
+        "en": "Avoidance radius by settlement population:",
+    },
+    "lbl_col_max_population": {"uk": "Населення до", "en": "Population up to"},
+    "lbl_col_radius_km": {"uk": "Радіус, км", "en": "Radius, km"},
+    "btn_add_radius_row": {"uk": "Додати", "en": "Add"},
+    "btn_remove_radius_row": {"uk": "Видалити обране", "en": "Remove selected"},
+    "msg_invalid_number": {
+        "uk": "Введіть коректні додатні числа для населення й радіуса.",
+        "en": "Enter valid positive numbers for population and radius.",
+    },
+    "lbl_ms_unit_m": {"uk": "м", "en": "m"},
+    "btn_new_route_type": {"uk": "Новий тип", "en": "New type"},
+    "btn_delete_route_type": {"uk": "Видалити тип", "en": "Delete type"},
+    "lbl_current_route_type": {"uk": "Поточний тип маршруту:", "en": "Current route type:"},
     "lbl_deg": {"uk": "°", "en": "°"},
     "lbl_ms": {"uk": "м/с", "en": "m/s"},
 
@@ -545,6 +723,14 @@ _TR: dict[str, dict[str, str]] = {
         "uk": "Спочатку запустіть оптимізацію маршруту.",
         "en": "Run route optimization first.",
     },
+    "msg_no_route_type_for_coords": {
+        "uk": "Оберіть тип маршруту в Конфігурації -- звідти координатна "
+              "оптимізація бере радіус обльоту населених пунктів (залежно "
+              "від їхнього населення).",
+        "en": "Select a route type in Configuration -- that's where "
+              "coordinate optimization gets the settlement avoidance "
+              "radius (based on population).",
+    },
     "msg_no_terrain_for_save": {
         "uk": "Дані рельєфу (SRTM) недоступні -- висоту обхідних точок "
               "неможливо коректно розрахувати. Перевірте наявність .hgt "
@@ -565,6 +751,7 @@ _TR: dict[str, dict[str, str]] = {
         "en": "Mission saved: {n} points.\n{path}",
     },
     "lbl_aircraft_profile": {"uk": "Профіль літака:", "en": "Aircraft profile:"},
+    "lbl_route_type": {"uk": "Тип маршруту:", "en": "Route type:"},
     "lbl_tank_capacity": {"uk": "Ємність бака:", "en": "Tank capacity:"},
     "lbl_liters": {"uk": "л", "en": "L"},
     "lbl_cruise_consumption": {"uk": "Витрата (крейсер):", "en": "Consumption (cruise):"},
@@ -631,8 +818,6 @@ _TR: dict[str, dict[str, str]] = {
     },
     "opt_col_before": {"uk": "Було", "en": "Before"},
     "opt_col_after": {"uk": "Стало", "en": "After"},
-    "lbl_settlement_threshold": {"uk": "Мінімальна відстань до НП:", "en": "Min distance to settlements:"},
-    "lbl_km": {"uk": "км", "en": "km"},
     "btn_check_settlements": {"uk": "Перевірити обліт НП", "en": "Check settlement clearance"},
     "box_populated_areas_map": {"uk": "Карта маршруту й населених пунктів", "en": "Route & settlements map"},
     "box_settlement_violations": {"uk": "Порушення мінімальної відстані", "en": "Minimum distance violations"},
@@ -679,6 +864,10 @@ _TR: dict[str, dict[str, str]] = {
     },
     "settlement_pop_suffix_fmt": {"uk": ", {pop} ос.", "en": ", pop. {pop}"},
     "hint_bad_speed": {"uk": "швидкість?", "en": "speed?"},
+    "hint_no_profile_speed": {
+        "uk": "заповніть профіль літака (Конфігурація)",
+        "en": "fill in an aircraft profile (Configuration)",
+    },
 
     # --- сторінка "Конфігурація" ---
     "label_cruise_speed": {"uk": "Крейсерська швидкість (м/с):", "en": "Cruise speed (m/s):"},

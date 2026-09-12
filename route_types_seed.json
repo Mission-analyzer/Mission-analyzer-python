@@ -1,0 +1,16 @@
+{
+  "route_types": [
+    {
+      "version_major": 1,
+      "version_minor": 0,
+      "name": "Типовий",
+      "altitude_controlled_m": 120.0,
+      "altitude_occupied_m": 60.0,
+      "altitude_border_crossing_m": 90.0,
+      "max_waypoints": 255,
+      "border_maneuver_angle_max_deg": 2.0,
+      "population_radii_km": [[500, 0.5], [5000, 1.0], [50000, 2.0], [1000000, 3.0]]
+    }
+  ],
+  "current_name": "Типовий"
+}

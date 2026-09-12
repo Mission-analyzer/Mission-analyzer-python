@@ -14,7 +14,7 @@ import os
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 from online_tiles import OnlineTileCache, PROVIDERS
 from analyzer import MissionAnalyzer
@@ -23,12 +23,14 @@ import theme
 import icons
 import settings
 import aircraft_profiles
+import route_types
 
 from mission_page import MissionPageMixin
 from mission_editor import MissionEditorMixin
 from ardupilot_link import ArduPilotLinkMixin
 from sd_file_manager import SDFileManagerMixin
 from analysis_page import AnalysisPageMixin
+from optimization_page import OptimizationPageMixin
 from config_page import ConfigPageMixin
 from help_page import HelpPageMixin
 
@@ -66,14 +68,24 @@ def _bundled_asset_dir() -> str:
 
 class App(
     MissionPageMixin, MissionEditorMixin, ArduPilotLinkMixin, SDFileManagerMixin,
-    AnalysisPageMixin, ConfigPageMixin, HelpPageMixin, tk.Tk,
+    AnalysisPageMixin, OptimizationPageMixin, ConfigPageMixin, HelpPageMixin, tk.Tk,
 ):
     ICON_CANDIDATES = ("icon.png", "logo.png", "icon.ico", "logo.ico")
 
     def __init__(self):
         super().__init__()
 
+        # КРИТИЧНО: без цього БУДЬ-ЯКИЙ виняток у будь-якому Tkinter-
+        # колбеку (включно з self.after(0, ...) з фонових потоків)
+        # ТИХО друкується у stderr і зникає -- у зібраному .exe без
+        # консолі це виглядає точно як "нічого не відбувається", хоча
+        # насправді стався збій. ВИЯВЛЕНО НА ПРАКТИЦІ як імовірна
+        # причина реальних скарг користувача на "зависання" оптимізації
+        # висоти. Тепер ЖОДНА помилка ніде в застосунку не зникає тихо.
+        self.report_callback_exception = self._on_uncaught_exception
+
         self._seed_aircraft_profiles_if_missing()
+        self._seed_route_types_if_missing()
         self._settings_data = settings.load_settings(self._settings_path())
         saved_lang = self._settings_data.get("lang")
         if saved_lang in i18n.LANGS:
@@ -143,6 +155,7 @@ class App(
             "map_cache_dir": self.tilecache_var.get(),
             "alt_min": self.alt_min_var.get(),
             "turn_min": self.turn_min_var.get(),
+            "angle_max": self.angle_max_var.get(),
             "zoom": self.zoom_var.get(),
             "max_tiles": self.max_tiles_var.get(),
             "app_theme": self.app_theme_var.get(),
@@ -152,7 +165,6 @@ class App(
             "mission_file": self.file_var.get(),
             "flight_date": self.flight_date_var.get(),
             "flight_time": self.flight_time_var.get(),
-            "cruise_speed": self.cruise_speed_var.get(),
             "url_occupied": self.url_occupied_var.get(),
             "url_windy": self.url_windy_var.get(),
             "url_forecast": self.url_forecast_var.get(),
@@ -186,6 +198,19 @@ class App(
         return None
 
 
+    def _on_uncaught_exception(self, exc_type, exc_value, exc_tb):
+        import traceback
+        tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        print(tb_text)  # лишаємо й у stderr -- корисно, якщо консоль усе ж є
+        try:
+            messagebox.showerror(
+                i18n.t("msg_unexpected_error_title"),
+                f"{i18n.t('msg_unexpected_error_body')}\n\n{tb_text[-800:]}",
+            )
+        except Exception:
+            pass  # навіть якщо ПОКАЗ помилки сам провалився -- не зациклюємось
+
+
     def _seed_aircraft_profiles_if_missing(self):
         """Якщо поруч з .exe ще НЕМАЄ aircraft_profiles.json (перший
         запуск ЦІЄЇ конкретної збірки чи взагалі перший запуск програми
@@ -205,6 +230,29 @@ class App(
         if os.path.exists(real_path):
             return  # вже є свій файл -- НЕ чіпаємо, що б там не лежало
         seed_path = self._find_asset(("aircraft_profiles_seed.json",))
+        if seed_path is None:
+            return  # зерна немає в цій збірці -- нормально, просто порожній старт
+        try:
+            import shutil
+            shutil.copyfile(seed_path, real_path)
+        except OSError:
+            pass  # не вдалось скопіювати -- не критично, просто стартуємо порожніми
+
+
+    def _seed_route_types_if_missing(self):
+        """Той САМИЙ, наскрізний механізм, що й _seed_aircraft_profiles_
+        if_missing() вище -- за прямою вказівкою користувача: одна
+        логіка для обох, не дві злегка різні. Без цього кроку кожна
+        НОВА зібрана версія .exe стартувала б із ПОРОЖНІМ списком типів
+        маршруту (route_types.load_route_types() тихо повертає порожній
+        RouteTypeStore, якщо файлу немає) -- кнопка "Оптимізувати
+        висоту" одразу впала б з попередженням "Оберіть тип маршруту",
+        і користувачу довелось би вручну створювати перший запис,
+        перш ніж хоч раз спробувати нову можливість."""
+        real_path = route_types.default_route_types_path()
+        if os.path.exists(real_path):
+            return  # вже є свій файл -- НЕ чіпаємо, що б там не лежало
+        seed_path = self._find_asset(("route_types_seed.json",))
         if seed_path is None:
             return  # зерна немає в цій збірці -- нормально, просто порожній старт
         try:
@@ -260,6 +308,7 @@ class App(
         self.file_var = tk.StringVar(value=d.get("mission_file", ""))
         self.alt_min_var = tk.StringVar(value=str(d.get("alt_min", "40")))
         self.turn_min_var = tk.StringVar(value=str(d.get("turn_min", "2")))
+        self.angle_max_var = tk.StringVar(value=str(d.get("angle_max", "2")))
         self.use_srtm_var = tk.BooleanVar(value=d.get("use_srtm", True))
         self.srtm_var = tk.StringVar(value=d.get("srtm_dir", "srtm"))
         self.tilecache_var = tk.StringVar(value=d.get("map_cache_dir", "map_cache"))
@@ -282,7 +331,6 @@ class App(
         # дата і час планованого польоту (для аналізу метеоумов)
         self.flight_date_var = tk.StringVar(value=d.get("flight_date", ""))
         self.flight_time_var = tk.StringVar(value=d.get("flight_time", "12:00"))
-        self.cruise_speed_var = tk.StringVar(value=str(d.get("cruise_speed", "50")))
         # URL-и картографічних і метеосервісів
         self.url_occupied_var = tk.StringVar(value=d.get("url_occupied", "https://deepstatemap.live/api/history/last/geojson"))
         self.url_windy_var = tk.StringVar(value=d.get("url_windy", "https://www.windy.com"))
@@ -641,6 +689,7 @@ class App(
         for page_key, label_key, icon_name in (
             ("mission", "nav_mission", "mission"),
             ("analysis", "nav_analysis", "analysis"),
+            ("optimization", "nav_optimization", "optimization"),
             ("config", "nav_config", "config"),
             ("help", "nav_help", "help"),
         ):
@@ -673,6 +722,7 @@ class App(
         # передаёт общий контейнер content и стандартные отступы pad
         self._build_mission_page(content, pad)
         self._build_analysis_page(content, pad)
+        self._build_optimization_page(content, pad)
         self._build_config_page(content, pad)
         self._build_help_page(content, pad)
 

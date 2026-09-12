@@ -16,6 +16,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from waypoints import parse_waypoints, command_name, Waypoint
+import math
 from geo import haversine_m, bearing_deg, TILE_SIZE, lonlat_to_pixel, pixel_to_lonlat
 from srtm import SRTMTerrain, SRTMError
 from online_tiles import OnlineTileCache
@@ -372,7 +373,7 @@ class MissionPageMixin:
         table_frame = tk.Frame(mission_inner, bg=c["bg"])
         table_frame.pack(fill="x", **pad)
         self._mission_bg_widgets.append(table_frame)
-        table_columns = ("idx", "cmd", "p1", "p2", "p3", "p4", "lat", "lon", "alt", "frame", "dist", "az")
+        table_columns = ("idx", "cmd", "p1", "p2", "p3", "p4", "lat", "lon", "alt", "frame", "dist", "az", "angle")
         self.mission_table = ttk.Treeview(
             table_frame, columns=table_columns, show="headings", height=7, style="MissionBlack.Treeview",
         )
@@ -389,6 +390,7 @@ class MissionPageMixin:
             "frame": ("table_col_frame", 50),
             "dist": ("table_col_dist", 70),
             "az": ("table_col_az", 55),
+            "angle": ("table_col_angle", 55),
         }
         for col, (key, width) in table_headings.items():
             self.mission_table.heading(col, text=i18n.t(key))
@@ -600,6 +602,7 @@ class MissionPageMixin:
         try:
             alt_min = float(self.alt_min_var.get())
             turn_min = float(self.turn_min_var.get())
+            angle_max = float(self.angle_max_var.get())
         except ValueError:
             messagebox.showerror(i18n.t("msg_bad_numbers_title"), i18n.t("msg_bad_numbers_body"))
             return False
@@ -617,7 +620,7 @@ class MissionPageMixin:
             except SRTMError as e:
                 messagebox.showwarning(i18n.t("msg_srtm_unavailable_title"), i18n.t("msg_srtm_unavailable_body", err=e))
 
-        self.analyzer = MissionAnalyzer(wps, alt_min=alt_min, turn_min=turn_min, terrain=terrain)
+        self.analyzer = MissionAnalyzer(wps, alt_min=alt_min, turn_min=turn_min, angle_max=angle_max, terrain=terrain)
         self._populate_mission_table(wps)
         return True
 
@@ -628,20 +631,31 @@ class MissionPageMixin:
         self.mission_table.delete(*self.mission_table.get_children())
 
         last_pos = None
+        last_abs_alt = None
         for wp in waypoints:
             # пропускаємо нульову Home-точку -- Mission Planner теж її не показує в таблиці
             if wp.index == 0:
                 continue
 
             has_pos = wp.lat != 0 or wp.lon != 0
-            dist_str = az_str = ""
+            dist_str = az_str = angle_str = ""
+            abs_alt = self.analyzer._absolute_alt(wp) if self.analyzer else None
             if has_pos and last_pos is not None:
                 dist = haversine_m(last_pos[0], last_pos[1], wp.lat, wp.lon)
                 az = bearing_deg(last_pos[0], last_pos[1], wp.lat, wp.lon)
                 dist_str = f"{dist:.0f}"
                 az_str = f"{az:.0f}"
+                # кут нахилу траєкторії -- ТА САМА формула, що вже
+                # використовує analyzer.check_flight_path_angle і
+                # angle_view.py (atan2(різниця_висот, відстань),
+                # знаковий -- додатний = набір, від'ємний = зниження),
+                # не окрема вигадана логіка.
+                if abs_alt is not None and last_abs_alt is not None and dist > 0.01:
+                    angle = math.degrees(math.atan2(abs_alt - last_abs_alt, dist))
+                    angle_str = f"{angle:+.1f}"
             if has_pos:
                 last_pos = (wp.lat, wp.lon)
+                last_abs_alt = abs_alt
 
             self.mission_table.insert("", "end", values=(
                 wp.index,
@@ -653,6 +667,7 @@ class MissionPageMixin:
                 _frame_name(wp.frame),
                 dist_str,
                 az_str,
+                angle_str,
             ))
 
         # висота таблиці обмежена висотою видимої області вікна (див.

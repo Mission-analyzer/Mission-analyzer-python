@@ -147,7 +147,7 @@ class ObstacleCircle:
     name: str
     lat: float
     lon: float
-    radius_km: float  # = порогова відстань (threshold_km), однакова для всіх НП поки що
+    radius_km: float  # ІНДИВІДУАЛЬНИЙ радіус ЦЬОГО конкретного НП -- залежить від його населення, див. RouteType.radius_for_population
 
 
 @dataclass
@@ -372,11 +372,24 @@ def segment_intersects_circle(
 def build_tangent_graph(
     start: tuple[float, float], end: tuple[float, float],
     obstacles: list[ObstacleCircle],
+    enable_pair_filter: bool = True,
 ) -> dict:
     """Будує граф дотичних: вузли (старт, фініш, точки дотику на
     кожному колі), ребра (дотичні лінії + дуги кіл де потрібно),
     відфільтровані segment_intersects_circle() від недопустимих
     (що перетинають ІНШІ перешкоди).
+
+    enable_pair_filter -- чи застосовувати фільтр релевантності пар
+    перешкод (MAX_PAIR_GAP_MULT, нижче). УВІМКНЕНО за замовчуванням --
+    прибирає фізично безглузді бітангенти між геть далекими,
+    нерелевантними перешкодами (звідси й крихітні "мікроребра" в кілька
+    метрів, знайдені на практиці). АЛЕ: ВИЯВЛЕНО НА ПРАКТИЦІ (реальний
+    регрес) -- коли перешкод БАГАТО й вони утворюють щільний кластер,
+    цей самий фільтр може прибрати ЄДИНО можливий шлях обходу, даючи
+    "не вдалось обійти" там, де раніше все працювало. Викликач має
+    ПОВТОРИТИ спробу з enable_pair_filter=False, якщо перша спроба не
+    знайшла шляху -- ніколи не жертвувати коректністю заради
+    косметичного прибирання дрібних ребер.
 
     Повертає структуру графа, придатну для Дейкстри:
     {"nodes": {node_id: (x, y)}, "edges": {node_id: [(сусід, вага), ...]},
@@ -445,12 +458,27 @@ def build_tangent_graph(
                 nid = add_node(t[0], t[1], idx)
                 add_edge(base_id, nid, math.hypot(t[0] - bx, t[1] - by))
 
-    # 3. перешкода <-> перешкода (зовнішні дотичні між кожною парою)
+    # 3. перешкода <-> перешкода (зовнішні дотичні між кожною парою) --
+    # ЛИШЕ для пар, що геометрично РЕЛЕВАНТНІ одна одній (проміжок між
+    # колами не більший за MAX_PAIR_GAP_MULT×радіус). ВИЯВЛЕНО НА
+    # ПРАКТИЦІ: без цього фільтра рахувалась дотична між УСІМА парами
+    # без винятку -- навіть коли перешкоди за 40+ радіусів одна від
+    # одної й геометрично не мають жодного стосунку до маршруту. Кожна
+    # така "зайва" пара додає вузол на колі, що ФАКТИЧНО релевантне
+    # (напр. дотична Вищевеселе<->Мирне додає вузол на колі Вищевеселе,
+    # хоча Мирне -- за 4.5км убік і ніколи не буде на реальному шляху) --
+    # ці зайві вузли опинялись майже впритул до вже потрібних, даючи
+    # фізично безглузді ребра в кілька метрів після відновлення шляху.
+    MAX_PAIR_GAP_MULT = 3.0
     n = len(obs_local)
     for i in range(n):
         (xi, yi), ri, _oi = obs_local[i]
         for j in range(i + 1, n):
             (xj, yj), rj, _oj = obs_local[j]
+            center_dist = math.hypot(xj - xi, yj - yi)
+            gap = center_dist - ri - rj
+            if enable_pair_filter and gap > MAX_PAIR_GAP_MULT * max(ri, rj):
+                continue  # перешкоди занадто далеко одна від одної -- бітангента між ними не може бути частиною найкоротшого шляху
             for (t1, t2) in external_tangent_lines(xi, yi, ri, xj, yj, rj):
                 if blocked_by_other_circles(t1, t2, {i, j}):
                     continue
@@ -501,11 +529,30 @@ def shortest_path_around_obstacles(
     не заходять у ЖОДНЕ коло-перешкоду.
 
     Якщо obstacles порожній -- повертає [start, end] (пряма лінія,
-    оптимізація не потрібна)."""
+    оптимізація не потрібна).
+
+    Спершу пробує З фільтром релевантності пар (прибирає фізично
+    безглузді мікроребра) -- якщо шляху НЕ знайдено, ПОВТОРЮЄ БЕЗ
+    фільтра. ВИЯВЛЕНО НА ПРАКТИЦІ, реальний регрес: коли перешкод
+    багато й вони утворюють щільний кластер, фільтр міг прибрати
+    ЄДИНО можливий шлях обходу ("не вдалось обійти" там, де раніше
+    все працювало) -- коректність шляху ЗАВЖДИ важливіша за косметичне
+    прибирання дрібних ребер."""
     if not obstacles:
         return [start, end]
 
-    graph = build_tangent_graph(start, end, obstacles)
+    try:
+        return _shortest_path_around_obstacles_once(start, end, obstacles, enable_pair_filter=True)
+    except RuntimeError:
+        return _shortest_path_around_obstacles_once(start, end, obstacles, enable_pair_filter=False)
+
+
+def _shortest_path_around_obstacles_once(
+    start: tuple[float, float], end: tuple[float, float],
+    obstacles: list[ObstacleCircle],
+    enable_pair_filter: bool,
+) -> list[tuple[float, float]]:
+    graph = build_tangent_graph(start, end, obstacles, enable_pair_filter=enable_pair_filter)
     nodes, edges, ref_lat = graph["nodes"], graph["edges"], graph["ref_lat"]
     node_owner, circles_local = graph["node_owner"], graph["circles_local"]
 
@@ -615,7 +662,7 @@ def shortest_path_around_obstacles(
 
 def optimize_leg(
     wp1_lat: float, wp1_lon: float, wp2_lat: float, wp2_lon: float,
-    nearby_settlements: list[dict], threshold_km: float,
+    nearby_settlements: list[dict], radius_lookup,
     leg_index: int,
 ) -> LegOptimizationResult:
     """Обхід ОДНОГО ребра. nearby_settlements -- ВЖЕ відфільтрований
@@ -623,6 +670,14 @@ def optimize_leg(
     settlements) у достатньому радіусі навколо цього ребра -- не лише
     settlements, що вже порушували поріг для прямої лінії (обхідний
     шлях може наблизитись і до інших).
+
+    radius_lookup -- callable(population: float | None) -> float (км),
+    ЗА ПРЯМОЮ ВКАЗІВКОЮ користувача: радіус обльоту ЗАЛЕЖИТЬ ВІД
+    НАСЕЛЕННЯ конкретного НП, не єдине число для всіх одразу (раніше
+    був один фіксований threshold_km -- навіть коментар у коді був
+    "однаковий для всіх НП поки що"). Типово -- route_type.radius_for_
+    population, але може бути будь-яка функція з тим самим інтерфейсом
+    (зручно для тестів).
 
     ВИСОТА вставлених точок НЕ рахується тут -- цей модуль свідомо не
     залежить від SRTM/analyzer (чиста геометрія). Висоту призначає
@@ -633,8 +688,8 @@ def optimize_leg(
     між висотами кінців (наприклад, ландшафт горбистий, а політ
     відбувається на приблизно постійній висоті НАД рельєфом).
 
-    ВИЯВЛЕНЕ НА ТЕСТАХ ОБМЕЖЕННЯ: якщо саме ребро КОРОТШЕ за ~2×
-    threshold_km, обхід може бути ГЕОМЕТРИЧНО НЕМОЖЛИВИМ навіть коли
+    ВИЯВЛЕНЕ НА ТЕСТАХ ОБМЕЖЕННЯ: якщо саме ребро КОРОТШЕ за ~2× радіус
+    конкретного НП, обхід може бути ГЕОМЕТРИЧНО НЕМОЖЛИВИМ навіть коли
     формально settlement не заходить УСЕРЕДИНУ жодної кінцевої точки --
     будь-яка точка на такому короткому відрізку просто фізично не може
     бути одночасно далі порога від ОБОХ кінців. У такому разі
@@ -644,7 +699,7 @@ def optimize_leg(
     obstacles = [
         ObstacleCircle(
             name=s["name"], lat=s["lat"], lon=s["lon"],
-            radius_km=threshold_km * SAFETY_MARGIN_MULT,
+            radius_km=radius_lookup(s.get("population")) * SAFETY_MARGIN_MULT,
         )
         for s in nearby_settlements
     ]
@@ -676,10 +731,12 @@ def optimize_leg(
 
 
 def optimize_route(
-    nav_wps: list, settlements_fetcher, threshold_km: float,
+    nav_wps: list, settlements_fetcher, radius_lookup,
     exclude_last_n_legs: int = 0,
+    exclude_leg_indices: set | None = None,
     fuel_budget: FuelBudget | None = None,
     roll_limit_deg: float | None = None,
+    min_radius_km: float | None = None,
     progress_callback=None,
 ) -> RouteOptimizationResult:
     """Оптимізує ВЕСЬ маршрут, ребро за ребром (послідовне покращення,
@@ -689,8 +746,29 @@ def optimize_route(
     релевантними НП одразу (немає циклу "виправ-перевір-виправ" в
     межах одного ребра).
 
+    radius_lookup -- callable(population: float | None) -> float (км),
+    ЗА ПРЯМОЮ ВКАЗІВКОЮ користувача: радіус обльоту ЗАЛЕЖИТЬ ВІД
+    НАСЕЛЕННЯ конкретного НП, замінює колишній єдиний threshold_km.
+    Типово -- route_type.radius_for_population.
+
+    min_radius_km -- НАЙМЕНШИЙ можливий радіус серед УСІХ налаштованих
+    градацій населення (для перевірки фізичної можливості повороту --
+    найтісніше коло найважче фізично пролетіти, якщо борт впорається з
+    НАЙМЕНШИМ радіусом, впорається і з будь-яким більшим). Якщо не
+    задано -- перевірка повороту просто не рахується (turn_check=None).
+
     exclude_last_n_legs -- скільки останніх ребер (зона посадки) НЕ
     оптимізувати -- приліт біля НП часто неминучий.
+
+    exclude_leg_indices -- ДОДАТКОВИЙ, довільний набір індексів ребер,
+    які НЕ обходити -- НЕЗАЛЕЖНО від exclude_last_n_legs (ребро може
+    бути будь-де в маршруті, не тільки в кінці). За прямою вказівкою
+    користувача: ребро, що перетинає державний кордон, НЕ повинно мати
+    обходу населеного пункту -- щільні точки обходу (десятки-сотні
+    метрів між ними) фізично несумісні з відстанню, потрібною для
+    плавної зміни висоти на переході. Замість спроби примирити ДВІ
+    несумісні вимоги в одному місці -- на такому ребрі обходу просто
+    немає, пряма лінія (як для "зони посадки").
 
     settlements_fetcher -- callable(lat_min, lat_max, lon_min, lon_max)
     -> list[dict], зазвичай populated_areas.fetch_settlements з
@@ -718,10 +796,10 @@ def optimize_route(
     оператором на боці UI, не приймається автоматично в цьому модулі.
 
     ГЕОМЕТРИЧНО НЕМОЖЛИВІ РЕБРА: якщо конкретне ребро занадто коротке
-    відносно threshold_km (виявлено на тестах -- відрізок коротший за
-    ~2×поріг фізично не може мати точку одночасно далі порога від ОБОХ
-    кінців) чи перешкоди оточують кінець ребра з усіх боків --
-    optimize_leg() підніме RuntimeError ЛИШЕ для ЦЬОГО ребра.
+    відносно потрібного радіуса (виявлено на тестах -- відрізок
+    коротший за ~2×радіус фізично не може мати точку одночасно далі
+    порога від ОБОХ кінців) чи перешкоди оточують кінець ребра з усіх
+    боків -- optimize_leg() підніме RuntimeError ЛИШЕ для ЦЬОГО ребра.
     optimize_route() ловить це ЛОКАЛЬНО (не валить весь розрахунок):
     ребро лишається без змін (пряма лінія), позначається failed=True з
     текстом причини -- решта маршруту оптимізується як зазвичай."""
@@ -729,6 +807,7 @@ def optimize_route(
 
     n_legs = len(nav_wps) - 1
     n_optimizable = max(0, n_legs - exclude_last_n_legs)
+    exclude_leg_indices = exclude_leg_indices or set()
 
     # запас навколо порога, у межах якого населений пункт з fetch_
     # settlements (обмежений bbox ребра) вважається релевантним для
@@ -762,11 +841,11 @@ def optimize_route(
     for i in range(n_legs):
         wp1, wp2 = nav_wps[i], nav_wps[i + 1]
 
-        if i < n_optimizable:
+        if i < n_optimizable and i not in exclude_leg_indices:
             nearby = [
                 s for s in settlements
                 if _pa._point_to_segment_m(s["lat"], s["lon"], wp1.lat, wp1.lon, wp2.lat, wp2.lon)
-                < threshold_km * 1000 * NEARBY_MARGIN_MULT
+                < radius_lookup(s.get("population")) * 1000 * NEARBY_MARGIN_MULT
             ]
 
             # ІТЕРАТИВНЕ уточнення множини перешкод -- ВИЯВЛЕНА НА
@@ -787,7 +866,7 @@ def optimize_route(
             residual_violations = []
             for _refine_i in range(MAX_REFINE_ITERATIONS):
                 try:
-                    leg_result = optimize_leg(wp1.lat, wp1.lon, wp2.lat, wp2.lon, nearby, threshold_km, i)
+                    leg_result = optimize_leg(wp1.lat, wp1.lon, wp2.lat, wp2.lon, nearby, radius_lookup, i)
                 except RuntimeError as e:
                     leg_result = None
                     refine_error = e
@@ -806,7 +885,7 @@ def optimize_route(
                         )
                         for j in range(len(new_path) - 1)
                     )
-                    if min_d < threshold_km * 1000:
+                    if min_d < radius_lookup(s.get("population")) * 1000:
                         newly_violated.append(s)
 
                 if not newly_violated:
@@ -831,8 +910,8 @@ def optimize_route(
 
             if leg_result is None:
                 # геометрично неможливо обійти (напр. ребро закоротке за
-                # 2×threshold_km, чи перешкоди оточують кінець ребра) --
-                # НЕ валимо ВЕСЬ розрахунок через ОДНЕ проблемне ребро:
+                # 2×радіус, чи перешкоди оточують кінець ребра) -- НЕ
+                # валимо ВЕСЬ розрахунок через ОДНЕ проблемне ребро:
                 # лишаємо його без змін (пряма лінія як була), позначаємо
                 # failed=True для звіту користувачу, і йдемо далі.
                 #
@@ -844,7 +923,7 @@ def optimize_route(
                 # оманливо, коли насправді саме там і сталась відмова).
                 d_km = haversine_m(wp1.lat, wp1.lon, wp2.lat, wp2.lon) / 1000.0
                 failed_obstacles = [
-                    ObstacleCircle(name=s["name"], lat=s["lat"], lon=s["lon"], radius_km=threshold_km)
+                    ObstacleCircle(name=s["name"], lat=s["lat"], lon=s["lon"], radius_km=radius_lookup(s.get("population")))
                     for s in nearby
                 ]
                 leg_result = LegOptimizationResult(
@@ -866,12 +945,11 @@ def optimize_route(
             progress_callback(i + 1, n_legs, leg_result)
 
     # --- Друга фаза: спроба ОБ'ЄДНАННЯ сусідніх FAILED ребер ---
-    # Коротке ребро (< ~2×threshold_km) геометрично не має куди
-    # відступити для обходу, тримаючи ОБИДВА кінці фіксованими --
-    # об'єднання із сусіднім ребром (спільний вейпоінт МІЖ ними
-    # тимчасово прибирається) дає довший відрізок і більше простору
-    # для маневру. Тільки СУСІДНІ failed+failed пари -- вже вдалі
-    # ребра не чіпаємо, менше побічних ефектів.
+    # Коротке ребро (< ~2×радіус) геометрично не має куди відступити
+    # для обходу, тримаючи ОБИДВА кінці фіксованими -- об'єднання із
+    # сусіднім ребром (спільний вейпоінт МІЖ ними тимчасово прибирається)
+    # дає довший відрізок і більше простору для маневру. Тільки СУСІДНІ
+    # failed+failed пари -- вже вдалі ребра не чіпаємо, менше побічних ефектів.
     i = 0
     while i < len(legs_results) - 1:
         lr1, lr2 = legs_results[i], legs_results[i + 1]
@@ -893,7 +971,7 @@ def optimize_route(
             try:
                 merged = optimize_leg(
                     wp_start.lat, wp_start.lon, wp_end.lat, wp_end.lon,
-                    combined_nearby, threshold_km, lr1.leg_index,
+                    combined_nearby, radius_lookup, lr1.leg_index,
                 )
             except RuntimeError:
                 i += 1
@@ -936,9 +1014,9 @@ def optimize_route(
     fuel_check = compute_fuel_check(total_new_m / 1000.0, fuel_budget) if fuel_budget else None
 
     turn_check = None
-    if roll_limit_deg is not None and fuel_budget is not None:
+    if roll_limit_deg is not None and fuel_budget is not None and min_radius_km is not None:
         airspeed_ms = fuel_budget.cruise_speed_kmh / 3.6
-        turn_check = compute_turn_radius_check(airspeed_ms, roll_limit_deg, threshold_km)
+        turn_check = compute_turn_radius_check(airspeed_ms, roll_limit_deg, min_radius_km)
 
     return RouteOptimizationResult(
         legs=legs_results,

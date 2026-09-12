@@ -14,6 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 from online_tiles import PROVIDERS
 import i18n
 import aircraft_profiles
+import route_types
 import theme
 
 
@@ -83,8 +84,8 @@ class ConfigPageMixin:
         self._reg_i18n(ttk.Label(opts), "text", "label_turn_min").grid(row=0, column=2, sticky="w", padx=(16, 6))
         ttk.Entry(opts, textvariable=self.turn_min_var, width=8).grid(row=0, column=3, sticky="w")
 
-        self._reg_i18n(ttk.Label(opts), "text", "label_cruise_speed").grid(row=0, column=4, sticky="w", padx=(16, 6))
-        ttk.Entry(opts, textvariable=self.cruise_speed_var, width=6).grid(row=0, column=5, sticky="w")
+        self._reg_i18n(ttk.Label(opts), "text", "label_angle_max").grid(row=0, column=4, sticky="w", padx=(16, 6))
+        ttk.Entry(opts, textvariable=self.angle_max_var, width=8).grid(row=0, column=5, sticky="w")
 
         self._reg_i18n(
             ttk.Checkbutton(opts, variable=self.use_srtm_var), "text", "check_srtm"
@@ -331,6 +332,149 @@ class ConfigPageMixin:
         self._refresh_profile_combobox()
         self._update_current_profile_label()
 
+        # === Тип маршруту ===
+        # Висотні вимоги залежно від того, ЧИЯ територія фактично (за
+        # лінією розмежування, не державним кордоном) під конкретною
+        # точкою маршруту. Це ЛИШЕ вихідні дані -- сам алгоритм
+        # використання (визначення "де я" й плавний перехід висоти) --
+        # окремий, ще не реалізований крок в "Аналіз -> Оптимізація".
+        self._route_type_store = route_types.load_route_types(
+            route_types.default_route_types_path()
+        )
+
+        rt_frame = ttk.LabelFrame(page_config)
+        rt_frame.pack(fill="x", **pad)
+        self._reg_i18n(rt_frame, "text", "box_route_types")
+
+        rt_select_row = ttk.Frame(rt_frame)
+        rt_select_row.pack(fill="x", pady=(6, 4))
+        self.route_type_select_var = tk.StringVar()
+        self.route_type_select_box = ttk.Combobox(
+            rt_select_row, textvariable=self.route_type_select_var, state="readonly", width=24,
+        )
+        self.route_type_select_box.pack(side="left", padx=6)
+        self.route_type_select_box.bind("<<ComboboxSelected>>", self._on_route_type_selected)
+        self._reg_i18n(
+            ttk.Button(rt_select_row, command=self._new_route_type_form), "text", "btn_new_route_type",
+        ).pack(side="left", padx=(6, 0))
+        self._reg_i18n(
+            ttk.Button(rt_select_row, command=self._delete_route_type), "text", "btn_delete_route_type",
+        ).pack(side="left", padx=(6, 6))
+
+        rt_form = ttk.Frame(rt_frame)
+        rt_form.pack(fill="x", padx=6, pady=(0, 6))
+
+        self._reg_i18n(ttk.Label(rt_form), "text", "lbl_route_type_name").grid(
+            row=0, column=0, sticky="w", padx=(0, 4), pady=3,
+        )
+        self.route_type_name_var = tk.StringVar()
+        ttk.Entry(rt_form, textvariable=self.route_type_name_var, width=24).grid(
+            row=0, column=1, columnspan=3, sticky="we", padx=(0, 6), pady=3,
+        )
+
+        self._reg_i18n(ttk.Label(rt_form), "text", "lbl_alt_controlled").grid(
+            row=1, column=0, sticky="w", padx=(0, 4), pady=3,
+        )
+        self.alt_controlled_var = tk.StringVar()
+        ttk.Entry(rt_form, textvariable=self.alt_controlled_var, width=8).grid(
+            row=1, column=1, sticky="w", padx=(0, 4), pady=3,
+        )
+        self._reg_i18n(ttk.Label(rt_form), "text", "lbl_ms_unit_m").grid(row=1, column=2, sticky="w")
+
+        self._reg_i18n(ttk.Label(rt_form), "text", "lbl_alt_occupied").grid(
+            row=2, column=0, sticky="w", padx=(0, 4), pady=3,
+        )
+        self.alt_occupied_var = tk.StringVar()
+        ttk.Entry(rt_form, textvariable=self.alt_occupied_var, width=8).grid(
+            row=2, column=1, sticky="w", padx=(0, 4), pady=3,
+        )
+        self._reg_i18n(ttk.Label(rt_form), "text", "lbl_ms_unit_m").grid(row=2, column=2, sticky="w")
+
+        self._reg_i18n(ttk.Label(rt_form), "text", "lbl_alt_border_crossing").grid(
+            row=3, column=0, sticky="w", padx=(0, 4), pady=3,
+        )
+        self.alt_border_crossing_var = tk.StringVar()
+        ttk.Entry(rt_form, textvariable=self.alt_border_crossing_var, width=8).grid(
+            row=3, column=1, sticky="w", padx=(0, 4), pady=3,
+        )
+        self._reg_i18n(ttk.Label(rt_form), "text", "lbl_ms_unit_m").grid(row=3, column=2, sticky="w")
+
+        self._reg_i18n(ttk.Label(rt_form), "text", "lbl_max_waypoints").grid(
+            row=4, column=0, sticky="w", padx=(0, 4), pady=3,
+        )
+        self.max_waypoints_var = tk.StringVar()
+        ttk.Entry(rt_form, textvariable=self.max_waypoints_var, width=8).grid(
+            row=4, column=1, sticky="w", padx=(0, 4), pady=3,
+        )
+
+        self._reg_i18n(ttk.Label(rt_form), "text", "lbl_border_maneuver_angle").grid(
+            row=5, column=0, sticky="w", padx=(0, 4), pady=3,
+        )
+        self.border_maneuver_angle_var = tk.StringVar()
+        ttk.Entry(rt_form, textvariable=self.border_maneuver_angle_var, width=8).grid(
+            row=5, column=1, sticky="w", padx=(0, 4), pady=3,
+        )
+        self._reg_i18n(ttk.Label(rt_form), "text", "lbl_deg").grid(row=5, column=2, sticky="w")
+
+        # --- Радіус обльоту НП, залежно від населення (ЗА ПРЯМОЮ
+        # ВКАЗІВКОЮ користувача: список пар, не одне число -- більший
+        # НП потребує ширшого обходу, ніж мале село). Treeview для
+        # показу наявних пар + окремі поля для додавання нової.
+        self._reg_i18n(
+            ttk.Label(rt_frame), "text", "lbl_population_radii",
+        ).pack(anchor="w", padx=6, pady=(6, 2))
+
+        radii_frame = ttk.Frame(rt_frame)
+        radii_frame.pack(fill="x", padx=6, pady=(0, 4))
+        self.population_radii_tree = ttk.Treeview(
+            radii_frame, columns=("population", "radius"), show="headings", height=4,
+        )
+        self.population_radii_tree.heading("population", text=i18n.t("lbl_col_max_population"))
+        self.population_radii_tree.heading("radius", text=i18n.t("lbl_col_radius_km"))
+        self._retranslate_callbacks.append(
+            lambda: (
+                self.population_radii_tree.heading("population", text=i18n.t("lbl_col_max_population")),
+                self.population_radii_tree.heading("radius", text=i18n.t("lbl_col_radius_km")),
+            )
+        )
+        self.population_radii_tree.column("population", width=140, anchor="e")
+        self.population_radii_tree.column("radius", width=100, anchor="e")
+        self.population_radii_tree.pack(side="left", fill="x", expand=True)
+
+        radii_add_row = ttk.Frame(rt_frame)
+        radii_add_row.pack(fill="x", padx=6, pady=(0, 6))
+        self._reg_i18n(ttk.Label(radii_add_row), "text", "lbl_col_max_population").pack(side="left", padx=(0, 4))
+        self.new_radius_population_var = tk.StringVar()
+        ttk.Entry(radii_add_row, textvariable=self.new_radius_population_var, width=10).pack(side="left", padx=(0, 8))
+        self._reg_i18n(ttk.Label(radii_add_row), "text", "lbl_col_radius_km").pack(side="left", padx=(0, 4))
+        self.new_radius_km_var = tk.StringVar()
+        ttk.Entry(radii_add_row, textvariable=self.new_radius_km_var, width=8).pack(side="left", padx=(0, 8))
+        self._reg_i18n(
+            ttk.Button(radii_add_row, command=self._add_population_radius_row), "text", "btn_add_radius_row",
+        ).pack(side="left", padx=(0, 6))
+        self._reg_i18n(
+            ttk.Button(radii_add_row, command=self._remove_population_radius_row), "text", "btn_remove_radius_row",
+        ).pack(side="left")
+
+        rt_btn_row = ttk.Frame(rt_frame)
+        rt_btn_row.pack(fill="x", padx=6, pady=(0, 6))
+        self._reg_i18n(
+            ttk.Button(rt_btn_row, command=self._save_route_type), "text", "btn_save_profile",
+        ).pack(side="left")
+        self._reg_i18n(
+            ttk.Button(rt_btn_row, command=self._set_current_route_type), "text", "btn_set_current_profile",
+        ).pack(side="left", padx=(6, 0))
+
+        self.current_route_type_label_var = tk.StringVar()
+        rt_current_row = ttk.Frame(rt_frame)
+        rt_current_row.pack(fill="x", padx=6, pady=(0, 6))
+        self._reg_i18n(ttk.Label(rt_current_row), "text", "lbl_current_route_type").pack(side="left")
+        ttk.Label(rt_current_row, textvariable=self.current_route_type_label_var, foreground="#4CAF50").pack(
+            side="left", padx=(4, 0),
+        )
+
+        self._refresh_route_type_combobox()
+
     def _on_app_theme_changed(self):
         self.apply_app_theme()
         self._save_settings()
@@ -469,15 +613,16 @@ class ConfigPageMixin:
             except ValueError:
                 return 0.0
 
+        # ДИНАМІЧНО, а не жорстко перелічений список полів -- інакше
+        # ЩОРАЗУ, коли в PROFILE_FIELDS_BY_TYPE додається нове поле
+        # (як щойно сталось із трьома TECS-полями), ця функція мовчки
+        # ігнорує його, і збереження просто НЕ записує нові значення,
+        # хоча вони видимі й редаговані у формі -- реальний баг,
+        # знайдений на цьому самому кроці.
+        field_values = {name: _f(name) for name in self._profile_field_vars}
         return aircraft_profiles.AircraftProfile(
             name=name, drone_type=drone_type, engine_type=engine_type,
-            cruise_consumption_lph=_f("cruise_consumption_lph"),
-            airspeed_min_ms=_f("airspeed_min_ms"),
-            airspeed_cruise_ms=_f("airspeed_cruise_ms"),
-            airspeed_max_ms=_f("airspeed_max_ms"),
-            roll_limit_deg=_f("roll_limit_deg"),
-            pitch_limit_max_deg=_f("pitch_limit_max_deg"),
-            pitch_limit_min_deg=_f("pitch_limit_min_deg"),
+            **field_values,
         )
 
 
@@ -531,3 +676,143 @@ class ConfigPageMixin:
         aircraft_profiles.save_profiles(
             aircraft_profiles.default_profiles_path(), self._aircraft_profile_store,
         )
+
+    # -------------------------------------------------------- тип маршруту --
+
+    def _refresh_route_type_combobox(self):
+        names = [rt.name for rt in self._route_type_store.route_types]
+        self.route_type_select_box.configure(values=names)
+        current = self._route_type_store.get_current()
+        if current:
+            self.route_type_select_var.set(current.name)
+            self._load_route_type_into_form(current)
+        elif names:
+            self.route_type_select_var.set(names[0])
+            self._load_route_type_into_form(self._route_type_store.get_by_name(names[0]))
+        else:
+            self.route_type_select_var.set("")
+            self._new_route_type_form()
+        self._update_current_route_type_label()
+
+
+    def _add_population_radius_row(self):
+        try:
+            pop = float(self.new_radius_population_var.get().replace(",", "."))
+            radius = float(self.new_radius_km_var.get().replace(",", "."))
+        except ValueError:
+            messagebox.showwarning(i18n.t("msg_weather_title"), i18n.t("msg_invalid_number"))
+            return
+        if pop <= 0 or radius <= 0:
+            messagebox.showwarning(i18n.t("msg_weather_title"), i18n.t("msg_invalid_number"))
+            return
+        self.population_radii_tree.insert("", "end", values=(pop, radius))
+        self.new_radius_population_var.set("")
+        self.new_radius_km_var.set("")
+
+
+    def _remove_population_radius_row(self):
+        for item in self.population_radii_tree.selection():
+            self.population_radii_tree.delete(item)
+
+
+    def _load_route_type_into_form(self, rt):
+        self.route_type_name_var.set(rt.name)
+        self.alt_controlled_var.set(str(rt.altitude_controlled_m))
+        self.alt_occupied_var.set(str(rt.altitude_occupied_m))
+        self.alt_border_crossing_var.set(str(rt.altitude_border_crossing_m))
+        self.max_waypoints_var.set(str(rt.max_waypoints))
+        self.border_maneuver_angle_var.set(str(rt.border_maneuver_angle_max_deg))
+        self.population_radii_tree.delete(*self.population_radii_tree.get_children())
+        for pop, radius in sorted(rt.population_radii_km, key=lambda t: t[0]):
+            self.population_radii_tree.insert("", "end", values=(pop, radius))
+
+
+    def _on_route_type_selected(self, event=None):
+        name = self.route_type_select_var.get()
+        rt = self._route_type_store.get_by_name(name)
+        if rt:
+            self._load_route_type_into_form(rt)
+
+
+    def _new_route_type_form(self):
+        self.route_type_name_var.set("")
+        for var in (self.alt_controlled_var, self.alt_occupied_var, self.alt_border_crossing_var):
+            var.set("")
+        self.max_waypoints_var.set("255")
+        self.border_maneuver_angle_var.set("2.0")
+        self.route_type_select_var.set("")
+        self.population_radii_tree.delete(*self.population_radii_tree.get_children())
+        self.population_radii_tree.insert("", "end", values=(1.0, 1.0))  # той самий дефолт, що й у RouteType.population_radii_km
+
+
+    def _save_route_type(self):
+        name = self.route_type_name_var.get().strip()
+        if not name:
+            messagebox.showwarning(i18n.t("msg_weather_title"), i18n.t("msg_profile_name_required"))
+            return
+
+        def _f(var):
+            try:
+                return float(var.get().replace(",", "."))
+            except ValueError:
+                return 0.0
+
+        try:
+            max_wp = int(self.max_waypoints_var.get())
+        except ValueError:
+            max_wp = 255
+
+        population_radii_km = []
+        for item in self.population_radii_tree.get_children():
+            pop_val, radius_val = self.population_radii_tree.item(item, "values")
+            try:
+                population_radii_km.append((float(pop_val), float(radius_val)))
+            except ValueError:
+                continue  # рядок пошкоджено -- пропускаємо, не валимо все збереження
+        if not population_radii_km:
+            population_radii_km = [(1.0, 1.0)]  # той самий дефолт, що й у RouteType -- порожній список ніколи не зберігаємо
+
+        rt = route_types.RouteType(
+            name=name,
+            altitude_controlled_m=_f(self.alt_controlled_var),
+            altitude_occupied_m=_f(self.alt_occupied_var),
+            altitude_border_crossing_m=_f(self.alt_border_crossing_var),
+            max_waypoints=max_wp,
+            border_maneuver_angle_max_deg=_f(self.border_maneuver_angle_var) or 2.0,
+            population_radii_km=population_radii_km,
+        )
+        self._route_type_store.upsert(rt)
+        self._save_route_types_to_disk()
+        self._refresh_route_type_combobox()
+        self.route_type_select_var.set(rt.name)
+
+
+    def _set_current_route_type(self):
+        name = self.route_type_select_var.get()
+        if not name:
+            return
+        self._route_type_store.current_name = name
+        self._save_route_types_to_disk()
+        self._update_current_route_type_label()
+
+
+    def _delete_route_type(self):
+        name = self.route_type_select_var.get()
+        if not name:
+            return
+        if not messagebox.askyesno(
+            i18n.t("msg_weather_title"), i18n.t("msg_confirm_delete_profile_fmt", name=name),
+        ):
+            return
+        self._route_type_store.remove(name)
+        self._save_route_types_to_disk()
+        self._refresh_route_type_combobox()
+
+
+    def _update_current_route_type_label(self):
+        current = self._route_type_store.get_current()
+        self.current_route_type_label_var.set(current.name if current else "-")
+
+
+    def _save_route_types_to_disk(self):
+        route_types.save_route_types(route_types.default_route_types_path(), self._route_type_store)
