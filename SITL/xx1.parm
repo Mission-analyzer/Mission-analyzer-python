@@ -1,0 +1,160 @@
+# xx1.parm -- параметры SITL для модели XX-1 (ArduPlane 4.8.0-dev, коммит 9165d224)
+# Запуск: --model plane-vtail:xx1.json --defaults xx1.parm -w   (приложение делает это само,
+# если xx1.json и xx1.parm лежат в папке SITL рядом с ArduPlane.elf)
+#
+# НЕ перенесено из 666.param (аппаратное, сломало бы SITL): порты, калибровки INS/компаса/RC,
+# ARSPD_TYPE, функции и границы серв реального борта (ещё два элерона и закрылки), EK3/AHRS.
+
+# --- база SITL для самолёта (Tools/autotest/models/plane.parm) ---
+BATT_MONITOR	4
+LOG_BITMASK	65535
+LAND_PITCH_DEG	1.00
+LAND_FLARE_SEC	3
+LAND_DISARMDELAY	3
+ARSPD_USE	1
+KFF_RDDRMIX	0.5
+RC1_MAX	2000
+RC1_MIN	1000
+RC1_TRIM	1500
+RC2_MAX	2000
+RC2_MIN	1000
+RC2_TRIM	1500
+RC3_MAX	2000
+RC3_MIN	1000
+RC3_TRIM	1000
+RC4_MAX	2000
+RC4_MIN	1000
+RC4_TRIM	1500
+RC5_MAX	2000
+RC5_MIN	1000
+RC5_TRIM	1500
+RC6_MAX	2000
+RC6_MIN	1000
+RC6_TRIM	1500
+RC7_MAX	2000
+RC7_MIN	1000
+RC7_TRIM	1500
+RC8_MAX	2000
+RC8_MIN	1000
+RC8_TRIM	1500
+FLTMODE1	10
+FLTMODE2	11
+FLTMODE3	12
+FLTMODE4	5
+FLTMODE5	2
+FLTMODE6	0
+FLTMODE_CH	8
+ACRO_LOCKING	1
+INS_ACCOFFS_X	0.001
+INS_ACCOFFS_Y	0.001
+INS_ACCOFFS_Z	0.001
+INS_ACCSCAL_X	1.001
+INS_ACCSCAL_Y	1.001
+INS_ACCSCAL_Z	1.001
+INS_ACC2OFFS_X	0.001
+INS_ACC2OFFS_Y	0.001
+INS_ACC2OFFS_Z	0.001
+INS_ACC2SCAL_X	1.001
+INS_ACC2SCAL_Y	1.001
+INS_ACC2SCAL_Z	1.001
+INS_GYR_CAL	0
+
+# --- Скорости XX-1 (реальные: 666.param / профиль XX-1) ---
+AIRSPEED_MIN	33
+AIRSPEED_CRUISE	47
+AIRSPEED_MAX	50
+SCALING_SPEED	37
+
+# --- Газ. ВАЖНО: в SITL максимальная тяга привязана к весу (~1.43 W) и не настраивается, поэтому реальный диапазон газа сжат выходом SERVO3_MAX. Так 77% газа автопилота = крейсерская тяга (ИЗМЕРЕНО по реальному полёту: 76.6..77.3%), а выше и ниже тяга меняется как у реального борта. THR_MIN=40 и THR_MAX=100 -- из дампа параметров в логе полёта. ---
+TRIM_THROTTLE	65
+THR_MIN	40
+THR_MAX	100
+THR_SLEWRATE	20
+SERVO3_FUNCTION	70
+SERVO3_MIN	1000
+SERVO3_MAX	1091
+
+# --- Элероны: полный ход = 1000..2000 (модель нормирует отклонение по этому диапазону) ---
+SERVO1_FUNCTION	4
+SERVO1_MIN	1000
+SERVO1_MAX	2000
+SERVO1_TRIM	1500
+
+# --- V-образное оперение (модель запускается как plane-vtail). SITL берёт две поверхности хвоста с каналов 2 и 4 и расшифровывает: elevator=(ch4-ch2)/2, rudder=(ch4+ch2)/2. Единственная раскладка, где руль высоты и направления не путаются и не меняют знак (проверено по формулам исходников, tools/vtail_check.py): канал 2 = правая половина (80) С РЕВЕРСОМ, канал 4 = левая (79). MIXING_GAIN реальный. ---
+SERVO2_FUNCTION	80
+SERVO2_MIN	1000
+SERVO2_MAX	2000
+SERVO2_TRIM	1500
+SERVO2_REVERSED	1
+SERVO4_FUNCTION	79
+SERVO4_MIN	1000
+SERVO4_MAX	2000
+SERVO4_TRIM	1500
+SERVO4_REVERSED	0
+MIXING_GAIN	0.5
+MIXING_OFFSET	0
+
+# --- Старт XX-1 после выстрела пиропатрона (см. scripts/xx1_launch.lua). Скрипт при постановке на охрану ставит борт в воздух (30 м, 38 м/с) -- собственной тяги SITL для разбега или пуска не хватает. Метод тот же, что в официальном примере ArduPilot sim_arming_pos.lua, и разработчики ArduPilot в таком тесте выключают EKF3 и переключают AHRS на симулятор (AHRS_EKF_TYPE=10): иначе фильтр навигации видит скачок позиции и скорости. Побочный эффект: оценка навигации идёт по истинному состоянию симулятора, а не по датчикам. ---
+SCR_ENABLE	1
+AHRS_EKF_TYPE	10
+EK3_ENABLE	0
+EK2_ENABLE	0
+
+# --- Лимиты (реальные) ---
+ROLL_LIMIT_DEG	25
+PTCH_LIM_MAX_DEG	20
+PTCH_LIM_MIN_DEG	-25
+PTCH_TRIM_DEG	0
+STALL_PREVENTION	1
+STAB_PITCH_DOWN	2
+
+# --- Навигация (реальные) ---
+NAVL1_PERIOD	25
+NAVL1_DAMPING	0.85
+NAVL1_LIM_BANK	40
+WP_RADIUS	50
+WP_LOITER_RAD	600
+
+# --- TECS (реальные) ---
+TECS_CLMB_MAX	2.5
+TECS_SINK_MIN	2
+TECS_SINK_MAX	10
+TECS_PITCH_MAX	10
+TECS_PITCH_MIN	0
+TECS_TIME_CONST	5
+TECS_THR_DAMP	0.5
+TECS_INTEG_GAIN	0.3
+TECS_VERT_ACC	10
+TECS_HGT_OMEGA	1
+TECS_SPD_OMEGA	2
+TECS_PTCH_DAMP	0.5
+TECS_SPDWEIGHT	0
+
+# --- Регуляторы крена/тангажа/рыскания (реальные). Управляющая сила рулей в xx1.json выведена именно из RLL_RATE_FF=PTCH_RATE_FF=1.0. Если в SITL появятся колебания -- удалить этот блок и вернуться к штатным коэффициентам SITL. ---
+RLL2SRV_RMAX	60
+RLL2SRV_TCONST	0.5
+RLL_RATE_P	0.15
+RLL_RATE_I	0.05
+RLL_RATE_D	0.025
+RLL_RATE_FF	1.0
+RLL_RATE_IMAX	0.15
+RLL_RATE_FLTD	12
+RLL_RATE_FLTE	5
+RLL_RATE_SMAX	150
+PTCH2SRV_RMAX_UP	30
+PTCH2SRV_RMAX_DN	60
+PTCH2SRV_TCONST	0.5
+PTCH2SRV_RLL	1
+PTCH_RATE_P	0.3
+PTCH_RATE_I	0.1
+PTCH_RATE_D	0.03
+PTCH_RATE_FF	1.0
+PTCH_RATE_IMAX	0.3
+PTCH_RATE_FLTD	17
+PTCH_RATE_FLTE	5
+PTCH_RATE_SMAX	150
+YAW_RATE_ENABLE	0
+YAW2SRV_DAMP	0.8
+YAW2SRV_RLL	1
+YAW2SRV_INT	0
+YAW2SRV_SLIP	0
