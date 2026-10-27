@@ -8,7 +8,9 @@ HelpPageMixin підмішується до класу App (app.py).
 from __future__ import annotations
 
 import os
+import sys
 import threading
+import webbrowser
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
@@ -177,6 +179,14 @@ class HelpPageMixin:
 
 
     def _apply_update(self, release: dict):
+        # Зібраний .exe виконує код з архіву в _internal, а updater копіює
+        # .py-файли з zipball -- у .exe це нічого не оновлювало б, лише
+        # казало б «встановлено». Тому для .exe відкриваємо сторінку
+        # релізу: звідти користувач бере готовий zip нової збірки.
+        if getattr(sys, "frozen", False):
+            if release.get("html_url"):
+                webbrowser.open(release["html_url"])
+            return
         if hasattr(self, "update_status_var"):
             self.update_status_var.set(i18n.t("status_downloading_update_fmt", tag=release["tag"]))
 

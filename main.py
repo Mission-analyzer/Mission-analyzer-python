@@ -10,7 +10,7 @@ import os
 import sys
 import tkinter as tk
 
-from meta import VERSION
+from meta import VERSION, AUTHOR
 
 SPLASH_DURATION_MS = 1300
 
@@ -65,7 +65,7 @@ def show_splash(duration_ms: int = SPLASH_DURATION_MS):
     except tk.TclError:
         pass
 
-    width, height = 460, 300
+    width, height = 460, 330
     sw, sh = splash.winfo_screenwidth(), splash.winfo_screenheight()
     x, y = (sw - width) // 2, (sh - height) // 2
     splash.geometry(f"{width}x{height}+{x}+{y}")
@@ -86,13 +86,30 @@ def show_splash(duration_ms: int = SPLASH_DURATION_MS):
         splash, text=f"Version: {VERSION}", fg="#4CAF50", bg="black",
         font=("Segoe UI", 10, "bold"),
     ).pack(pady=(4, 0))
+    tk.Label(
+        splash, text=f"by {AUTHOR}", fg="#888888", bg="black",
+        font=("Segoe UI", 9),
+    ).pack(pady=(2, 0))
 
     splash.update()
     splash.after(duration_ms, splash.destroy)
     splash.mainloop()
 
 
+def _set_windows_app_id():
+    """Свій AppUserModelID: Windows групує вікно в таскбарі як окрему
+    програму з НАШОЮ іконкою, а не як python.exe/pythonw.exe."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MissionAnalyzer.App")
+    except Exception:
+        pass
+
+
 def main():
+    _set_windows_app_id()
     show_splash()
     from app import main as app_main
     app_main()

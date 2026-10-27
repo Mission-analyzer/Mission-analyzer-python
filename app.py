@@ -31,6 +31,7 @@ from ardupilot_link import ArduPilotLinkMixin
 from sd_file_manager import SDFileManagerMixin
 from analysis_page import AnalysisPageMixin
 from optimization_page import OptimizationPageMixin
+from simulation_page import SimulationPageMixin
 from config_page import ConfigPageMixin
 from help_page import HelpPageMixin
 
@@ -68,7 +69,7 @@ def _bundled_asset_dir() -> str:
 
 class App(
     MissionPageMixin, MissionEditorMixin, ArduPilotLinkMixin, SDFileManagerMixin,
-    AnalysisPageMixin, OptimizationPageMixin, ConfigPageMixin, HelpPageMixin, tk.Tk,
+    AnalysisPageMixin, OptimizationPageMixin, SimulationPageMixin, ConfigPageMixin, HelpPageMixin, tk.Tk,
 ):
     ICON_CANDIDATES = ("icon.png", "logo.png", "icon.ico", "logo.ico")
 
@@ -291,6 +292,15 @@ class App(
     def _try_set_icon(self):
         """Ищет логотип рядом с программой (icon.png/logo.png/icon.ico/logo.ico) и ставит как иконку окна."""
         base = _bundled_asset_dir()
+        ico = os.path.join(base, "icon.ico")
+        if sys.platform == "win32" and os.path.isfile(ico):
+            try:
+                # default= -- іконка й для всіх Toplevel/діалогів, а не лише головного вікна;
+                # .ico містить готові 16/24/32 px -- у заголовку й таскбарі чітко, без розмиття
+                self.iconbitmap(default=ico)
+                return
+            except tk.TclError:
+                pass
         for name in self.ICON_CANDIDATES:
             path = os.path.join(base, name)
             if os.path.isfile(path) and theme.set_window_icon(self, path):
@@ -330,7 +340,7 @@ class App(
         self.show_occupied_var = tk.BooleanVar(value=d.get("show_occupied", False))
         # дата і час планованого польоту (для аналізу метеоумов)
         self.flight_date_var = tk.StringVar(value=d.get("flight_date", ""))
-        self.flight_time_var = tk.StringVar(value=d.get("flight_time", "12:00"))
+        self.flight_time_var = tk.StringVar(value=d.get("flight_time", "21:00"))
         # URL-и картографічних і метеосервісів
         self.url_occupied_var = tk.StringVar(value=d.get("url_occupied", "https://deepstatemap.live/api/history/last/geojson"))
         self.url_windy_var = tk.StringVar(value=d.get("url_windy", "https://www.windy.com"))
@@ -690,6 +700,7 @@ class App(
             ("mission", "nav_mission", "mission"),
             ("analysis", "nav_analysis", "analysis"),
             ("optimization", "nav_optimization", "optimization"),
+            ("simulation", "nav_simulation", "simulation"),
             ("config", "nav_config", "config"),
             ("help", "nav_help", "help"),
         ):
@@ -723,6 +734,7 @@ class App(
         self._build_mission_page(content, pad)
         self._build_analysis_page(content, pad)
         self._build_optimization_page(content, pad)
+        self._build_simulation_page(content, pad)
         self._build_config_page(content, pad)
         self._build_help_page(content, pad)
 

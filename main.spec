@@ -28,8 +28,22 @@
 #   собою (сам файл на флешці E:\Mission analyzer). --onefile
 #   розпаковував би все у тимчасову TEMP-папку при кожному запуску --
 #   і всі ці відносні шляхи почали б вести в нікуди.
+#
+# !!! ПЕРЕД КОЖНОЮ ПЕРЕЗБІРКОЮ, ЯКЩО ЗМІНЕНО datas/_ASSET_CANDIDATES
+# ВИЩЕ (додано новий файл на кшталт route_types_seed.json) АБО
+# hiddenimports НИЖЧЕ -- ВИДАЛИ теки build/ і dist/ ПОВНІСТЮ ПЕРЕД
+# `pyinstaller main.spec`. ВИЯВЛЕНО НА ПРАКТИЦІ: PyInstaller кешує
+# проміжні результати аналізу в build/, і без очищення новий файл у
+# datas може НЕ потрапити в готову збірку навіть попри те, що сам
+# .spec змінено правильно -- виглядає так, ніби seed-файл узагалі не
+# спрацював, хоча насправді код коректний, просто стара збірка не
+# перезаписалась повністю. Якщо змінено ЛИШЕ код (main.py чи інші
+# .py-файли проєкту, без змін datas/hiddenimports) -- очищення НЕ
+# обов'язкове, PyInstaller коректно підхоплює зміни самого коду й без
+# цього.
 
 import os
+import shutil
 import sys
 
 block_cipher = None
@@ -58,6 +72,16 @@ datas = [
     for name in _ASSET_CANDIDATES
     if os.path.isfile(os.path.join(PROJECT_DIR, name))
 ]
+
+# imageio-ffmpeg (експорт відео MP4 у симуляції, video_export.py) несе
+# ffmpeg.exe як ДАНІ пакета (imageio_ffmpeg/binaries/), а не як модуль --
+# без цього рядка відео-експорт у .exe мовчки не знайде ffmpeg. Пакет
+# опційний: немає його в оточенні збірки -- просто пропускаємо.
+try:
+    from PyInstaller.utils.hooks import collect_data_files
+    datas += collect_data_files("imageio_ffmpeg")
+except Exception:
+    pass
 
 # .ico саме для іконки самого EXE (Windows не вміє ставити .png як
 # іконку виконуваного файлу) -- беремо перший знайдений .ico, якщо є.
@@ -95,6 +119,21 @@ a = Analysis(
         # він встановлений у оточенні збірки, хочемо, щоб і ImageTk
         # гарантовано потрапив у збірку.
         'PIL._tkinter_finder',
+        # pygame-ce (встановлюється як "pygame-ce", імпортується як
+        # звичайний "import pygame" -- оригінальний pygame не годиться,
+        # див. joystick_input.py) -- ЗА ПРЯМОЮ ВКАЗІВКОЮ користувача
+        # (керування джойстиком/пультом RadioMaster Boxer у симуляції),
+        # той самий опційний патерн try/except ImportError, що й Pillow
+        # (joystick_input.py НЕ падає, якщо pygame відсутній -- просто
+        # немає керування джойстиком). pygame зазвичай постачається з
+        # власними PyInstaller-хуками (виявляє основні C-розширення
+        # сам), але явно додаємо підмодуль джойстика -- саме він нам
+        # реально потрібен, і саме його PyInstaller частіше пропускає
+        # в мінімальних білдах.
+        'pygame.joystick',
+        # imageio-ffmpeg імпортується ЛІНИВО всередині функції
+        # (video_export.find_ffmpeg) -- явно, щоб точно потрапив.
+        'imageio_ffmpeg',
     ],
     hookspath=[],
     hooksconfig={},
@@ -107,7 +146,13 @@ a = Analysis(
     # Явно виключаємо: PyInstaller навіть не почне аналізувати їхній
     # величезний граф залежностей (де траплялась RecursionError у
     # hook-matplotlib.py), і .exe вийде помітно легшим.
-    excludes=['matplotlib', 'numpy', 'scipy', 'pandas'],
+    # numpy БІЛЬШЕ НЕ у списку виключень -- ВИЯВЛЕНО НА ПРАКТИЦІ: сам
+    # pygame (тепер потрібен для джойстика/пульта в симуляції) імпортує
+    # numpy вже у власному __init__.py, навіть якщо використовується
+    # лише pygame.joystick -- виключення numpy зламало б запуск .exe
+    # рантайм-помилкою імпорту. matplotlib/scipy/pandas й далі не
+    # використовуються ніде в проєкті -- залишаються виключеними.
+    excludes=['matplotlib', 'scipy', 'pandas'],
     noarchive=False,
     optimize=0,
 )
@@ -145,3 +190,55 @@ coll = COLLECT(
     upx_exclude=[],
     name=APP_NAME,
 )
+
+# ======================================================================
+# ЗОВНІШНІ ТЕКИ ПОРУЧ З .exe (симулятор, v1.1.1)
+#
+# Програма шукає ці ресурси НЕ в _internal (sys._MEIPASS), а поруч із
+# самим .exe (os.path.dirname(sys.executable) -- scene_library.base_dir(),
+# limit_sound.sound_dir(), simulation_page._sitl_cwd, video_export):
+# користувач сам докладає туди свої моделі/звуки, тому через datas їх
+# класти НЕ МОЖНА -- у _internal програма їх просто не побачить.
+# Тому після COLLECT копіюємо їх у dist\<APP_NAME>\ самі -- замість
+# ручного копіювання перед архівацією (BUILD.md, кроки 2.3/2.4/4.1).
+#
+# (джерело в проєкті, ім'я поруч з .exe). Немає теки -- пропускаємо з
+# повідомленням у консолі збірки, збірка не падає.
+#   base_maps -> map_cache: результат download_base_maps.py. Робочий
+#   map_cache\ НЕ копіюємо: там увесь ваш накопичений кеш (гігабайти й
+#   райони ваших польотів) -- у публічний реліз йому не можна.
+# ======================================================================
+EXTERNAL_DIRS = [
+    ("models3d", "models3d"),      # 3D-моделі (.glb/.gltf/.obj) -- scene_library
+    ("sounds", "sounds"),          # stall/terrain/explosion .mp3/.wav -- limit_sound, alert_sound
+    ("DATA", "DATA"),              # навчальна місія, Lua-скрипти
+    ("ffmpeg", "ffmpeg"),          # свій ffmpeg.exe, якщо є (інакше -- з imageio-ffmpeg)
+    ("base_maps", "map_cache"),    # базові тайли zoom=8
+]
+
+# SITL (ArduPlane.elf + xx1.json / xx1.parm / scripts) -- ВИМКНЕНО за
+# замовчуванням: це параметри й модель КОНКРЕТНОГО апарата. Вмикати
+# свідомо, лише якщо їх справді можна публікувати.
+SHIP_SITL = False
+if SHIP_SITL:
+    EXTERNAL_DIRS.append(("SITL", "SITL"))
+
+# Сміття, яке не повинно потрапити в реліз: логи, бекапи, eeprom SITL
+# (параметри, накопичені при ваших запусках) тощо.
+_EXTERNAL_IGNORE = shutil.ignore_patterns(
+    "__pycache__", "*.pyc", "*.log", "*.tlog", "*.bak", "*.tmp",
+    "logs", "eeprom.bin", "Thumbs.db", "desktop.ini",
+)
+
+_dist_app_dir = os.path.join(DISTPATH, APP_NAME)
+print("\n[main.spec] Зовнішні теки поруч з .exe:")
+for _src_name, _dst_name in EXTERNAL_DIRS:
+    _src = os.path.join(PROJECT_DIR, _src_name)
+    if not os.path.isdir(_src):
+        print(f"  -- пропущено, теки немає: {_src_name}\\")
+        continue
+    _dst = os.path.join(_dist_app_dir, _dst_name)
+    shutil.copytree(_src, _dst, ignore=_EXTERNAL_IGNORE, dirs_exist_ok=True)
+    _n = sum(len(_f) for _, _, _f in os.walk(_dst))
+    print(f"  OK  {_src_name}\\ -> {_dst_name}\\  ({_n} файлів)")
+print()
