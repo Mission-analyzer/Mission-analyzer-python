@@ -1,0 +1,12 @@
+{
+  "roll_axis": 0,
+  "pitch_axis": 1,
+  "throttle_axis": 2,
+  "yaw_axis": 3,
+  "mode_axis": 6,
+  "arm_axis": 4,
+  "roll_invert": false,
+  "pitch_invert": true,
+  "throttle_invert": false,
+  "yaw_invert": false
+}
