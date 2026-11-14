@@ -1,6 +1,6 @@
 # Mission Analyzer
 
-> **README revision 2026-10-30** · describes **Mission Analyzer 1.2.0**
+> **README revision 2026-10-30** · describes **Mission Analyzer 1.1.2**
 > (latest published release: 1.1.1 — see [Releases](https://github.com/Mission-analyzer/Mission-analyzer-python/releases))
 
 A Windows desktop application for preparing ArduPilot / Mission Planner fixed-wing missions (`.waypoints`, QGC WPL 110):
@@ -28,7 +28,7 @@ the waypoint-count limit and the turn the airframe can physically fly (turn radi
 The result is a before/after map and a separate `.waypoints` file — the original mission is never modified.
 Method writeup: `route_optimization_community_post.md`.
 
-### Simulation *(new in 1.1.1, extended in 1.2.0)*
+### Simulation *(new in 1.1.1, extended in 1.1.2)*
 
 The mission is flown by **ArduPlane SITL** (real ArduPilot firmware running on the PC); Mission Analyzer connects to
 it over MAVLink like a ground station and draws everything SITL does not know about — the world around the aircraft.
@@ -53,7 +53,7 @@ separate process: 3D terrain with three levels of detail, forest canopy, buildin
 thermal imager. Without a GPU (or if the driver misbehaves) the same view is rendered on the CPU — the program checks
 the hardware itself and falls back automatically; collision checks work the same either way.
 
-### Map tab *(new in 1.2.0)*
+### Map tab *(new in 1.1.2)*
 
 Map data is tied to **the area you fly**, not to a single mission. It accumulates on the USB stick with every flight;
 the **Map** tab shows on a map what is already stored for each layer (green), what the loaded mission is missing
@@ -95,9 +95,10 @@ All map data is downloaded once and stored next to the program; after that the p
 |---|---|---|---|
 | Satellite and map tiles | maps, nose camera, thermal imager | Google, OpenStreetMap | provider terms; © OpenStreetMap contributors |
 | Terrain | altitude analysis, camera, collisions | NASA SRTM via `terrain.ardupilot.org` | public domain |
-| Settlements, power lines, obstacles | route analysis and optimization, camera, collisions | OpenStreetMap (Overpass API) | © OpenStreetMap contributors, ODbL |
+| Settlements, power lines, railways, obstacles | route analysis and optimization, camera, collisions | OpenStreetMap (Overpass API) | © OpenStreetMap contributors, ODbL |
+| Roads, road bridges, water | camera (landmarks), collisions with bridges | Overture Maps (from OpenStreetMap); Overpass as fallback | © OpenStreetMap contributors, Overture Maps Foundation, ODbL |
 | Forest canopy height (~10 m) | AGL over forest, collisions, camera | ETH Global Canopy Height 2020 (Lang et al., ETH Zürich) | CC BY 4.0 |
-| Building footprints | collisions, camera, thermal imager | Microsoft Global ML Building Footprints | ODbL |
+| Buildings (footprints, height, floors) | collisions, camera, thermal imager | Overture Maps (OpenStreetMap, Esri, Google, Microsoft) | © OpenStreetMap contributors, Overture Maps Foundation, ODbL |
 | Occupied territories | mission map overlay | deepstatemap.live | source terms |
 
 Notes:
@@ -130,7 +131,7 @@ Without `--apply` the script only shows what would be moved (dry run).
 | `nose_camera*.py`, `gl_camera.py` | Nose camera on the CPU (`nose_camera*`) and on the GPU (`gl_camera`), HUD window |
 | `hud_*.py` | HUD rendering, telemetry, limits and settings |
 | `scene_*.py`, `uav_panel.py` | 3D scene objects and the aircraft model |
-| `obstacles.py`, `terrain_impact.py` | OSM obstacles, forest canopy (ETH), buildings (Microsoft); collision checks |
+| `obstacles.py`, `terrain_impact.py` | OSM obstacles, forest canopy (ETH), buildings and landmarks (Overture); collision checks |
 | `map_page.py` | **Map** page: data coverage map, download for mission or region |
 | `config_page.py`, `sim_config_page.py`, `aircraft_profiles.py` | **Configuration**: analysis parameters, paths, HUD, aircraft profiles |
 | `ardupilot_link.py`, `sd_file_manager.py`, `board_ids.py` | Live MAVLink connection, SD-card file manager (MAVFTP) |
