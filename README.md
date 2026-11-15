@@ -60,6 +60,33 @@ the **Map** tab shows on a map what is already stored for each layer (green), wh
 (red outline), and downloads what is missing — for the mission or for a **region** you select with the right mouse
 button (with a size estimate before downloading). The summary line shows how much space each layer takes.
 
+## Articles
+
+Notes on how the program works and why it is built this way: problems we ran into and how we solved them. They are
+published in [Discussions](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions); questions and your own approaches are welcome in the comments.
+
+**Getting started**
+- [Welcome — Mission Analyzer for ArduPilot / Mission Planner (.waypoints)](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/1)
+- [Mission Analyzer: Why Python, Not C++](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/9)
+
+**Mission analysis and route planning**
+- [MCP Markup: Making Your ArduPilot Lua Scripts Visible in Mission Analyzer](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/3)
+- [Automatic route detours around populated areas — problem statement is up](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/4)
+- [From Detecting Problems to Building Routes: Where We Are on Auto-Generated Missions](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/5)
+- [Route Optimization in Practice: What Breaks When You Actually Try It](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/6)
+- [Why a Drone's Route Must Be Optimized on the Ground, Not in the Air](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/7)
+
+**Navigation**
+- [GPS Anti-Spoofing for ArduPilot — Sensor Cross-Check Approach](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/8)
+
+**Simulation (ArduPlane SITL)**
+- [XX-1 aircraft model in ArduPlane SITL](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/10)
+- [How to simulate a pyro-cartridge launch of a UAV in ArduPlane SITL (XX-1 example)](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/11)
+
+**Map data and terrain for the simulator camera**
+- [How Mission Analyzer loads linear landmarks for the simulator: from Overpass to Overture](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/12)
+- [Linear landmarks on SRTM terrain: roads, railways, bridges, water and airfields without waves and steps](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/13)
+
 ## Installation (ready-made `.exe`)
 
 You don't need Python to use the program — a portable Windows build is published on the
