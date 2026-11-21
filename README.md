@@ -1,12 +1,13 @@
 # Mission Analyzer
 
-> **README revision 2026-10-30** · describes **Mission Analyzer 1.1.2**
-> (latest published release: 1.1.1 — see [Releases](https://github.com/Mission-analyzer/Mission-analyzer-python/releases))
+> **README revision 2026-11-21** · describes **Mission Analyzer 1.1.3**
+> (published builds — see [Releases](https://github.com/Mission-analyzer/Mission-analyzer-python/releases))
 
 A Windows desktop application for preparing ArduPilot / Mission Planner fixed-wing missions (`.waypoints`, QGC WPL 110):
 it **analyzes** a mission before flight, **fixes** the route around populated areas, and lets you **fly it in a
-simulator** — with a nose camera, HUD, terrain, forest, buildings and power lines — before the real aircraft leaves
-the ground. Everything runs offline from a USB stick once the map data for the area has been collected.
+simulator** — with a nose camera, HUD, terrain, forest, buildings, power lines, airfields and city landmarks — before
+the real aircraft leaves the ground. Everything runs offline from a USB stick once the map data for the area has been
+collected.
 
 ## What it does
 
@@ -28,64 +29,74 @@ the waypoint-count limit and the turn the airframe can physically fly (turn radi
 The result is a before/after map and a separate `.waypoints` file — the original mission is never modified.
 Method writeup: `route_optimization_community_post.md`.
 
-### Simulation *(new in 1.1.1, extended in 1.1.2)*
+### Simulation
 
 The mission is flown by **ArduPlane SITL** (real ArduPilot firmware running on the PC); Mission Analyzer connects to
 it over MAVLink like a ground station and draws everything SITL does not know about — the world around the aircraft.
 
-- **Nose camera** — forward (FPV) and down views; colour view from satellite imagery draped over SRTM terrain;
-  **thermal imager** (white hot / black hot / Ironbow) with a day/night ground-temperature model, cold sky,
-  atmospheric contrast loss, sensor noise, vignetting and automatic gain control.
+- **Nose camera** — forward (FPV) and down views; colour view from satellite imagery draped over SRTM terrain, with
+  optional colour correction of the imagery; **thermal imager** (white hot / black hot / Ironbow) with a day/night
+  ground-temperature model that depends on land cover, cold sky, atmospheric contrast loss, sensor noise, vignetting
+  and automatic gain control.
+- **The world around the aircraft** — terrain, forest canopy, buildings with real heights, roads, railways, metro and
+  tram lines, rivers and lakes, bridges with decks, piers and real spans, stadiums, power lines and other obstacles,
+  **airfields** with runways, taxiways and aprons, and **city landmarks** (churches, stations, monuments) drawn from
+  building parts or from dedicated 3D models.
 - **HUD** in the X-Plane style — airspeed, ground speed, climb, altitude, AGL, heading tape, attitude, distance —
   with limit codes **TER / SPD / BNK / PIT** and audio warnings.
-- **Collision detection** — terrain (SRTM), **forest canopy** (real tree heights), **buildings**, OSM obstacles
-  (power lines and pylons, masts, towers, chimneys, cranes, wind turbines) and your own **3D scene objects**
-  (`.glb` / `.gltf` / `.obj` in the `models3d` folder). Over forest the HUD shows **AGL TREES** — height above the
-  canopy, which also drives the TER warning.
+- **Collision detection** — terrain (SRTM), **forest canopy** (real tree heights), **buildings**, bridges, landmarks,
+  OSM obstacles (power lines and pylons, masts, towers, chimneys, cranes, wind turbines) and your own **3D scene
+  objects** (`.glb` / `.gltf` / `.obj` in the `models3d` folder). Obstacles are checked along the flight path segment,
+  not only at sample points. Over forest the HUD shows **AGL TREES** — height above the canopy, which also drives the
+  TER warning.
+- **Mission map** follows the aircraft with a lead in the direction of flight, so free flights don't run off the map.
 - **Control** — joystick or RC transmitter in USB HID mode (e.g. RadioMaster / EdgeTX) with channel calibration
   (CH1…CHn, as on the radio), flight modes (MANUAL, FBWA, AUTO…), SITL launch with mission upload.
 - **Fly-by video** — MP4 export of the flight around 3D objects, encoded on the GPU when available (NVENC / Quick Sync /
   AMF) and on the CPU otherwise.
 - **HUD in a separate window** — the same camera frame and HUD on a second monitor.
 
-**GPU rendering.** If the PC has a suitable graphics card (OpenGL 3.3), the camera view is rendered on the GPU in a
-separate process: 3D terrain with three levels of detail, forest canopy, buildings, power lines, 3D objects and the
-thermal imager. Without a GPU (or if the driver misbehaves) the same view is rendered on the CPU — the program checks
-the hardware itself and falls back automatically; collision checks work the same either way.
+Map data for the simulation is loaded around the aircraft as it flies, not for the whole mission at once, so long
+missions start quickly.
 
-### Map tab *(new in 1.1.2)*
+**GPU rendering.** If the PC has a suitable graphics card (OpenGL 3.3), the camera view is rendered on the GPU in a
+separate process: 3D terrain with three levels of detail, forest canopy, buildings, landmarks, power lines, 3D objects
+and the thermal imager. Without a GPU (or if the driver misbehaves) the same view is rendered on the CPU — the program
+checks the hardware itself and falls back automatically; collision checks work the same either way.
+
+### Map tab
 
 Map data is tied to **the area you fly**, not to a single mission. It accumulates on the USB stick with every flight;
 the **Map** tab shows on a map what is already stored for each layer (green), what the loaded mission is missing
 (red outline), and downloads what is missing — for the mission or for a **region** you select with the right mouse
 button (with a size estimate before downloading). The summary line shows how much space each layer takes.
 
-## Articles
+**Preparing flight areas in advance** *(1.1.3)*. Roads, railways, water and airfields are aligned to the imagery
+(OpenStreetMap / Overture offsets reach 40 m), runways are fitted to their markings in the imagery (axis and width
+from the edge lines, ends from the threshold "piano keys"). The ground model is built from this: terrain corrected
+for buildings, level roads and water, the airfield as a flat table. The camera, collision checks and SITL use the same
+ground: an impact only with what is drawn.
 
-Notes on how the program works and why it is built this way: problems we ran into and how we solved them. They are
-published in [Discussions](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions); questions and your own approaches are welcome in the comments.
+The Map tab also opens the two reference catalogs below.
 
-**Getting started**
-- [Welcome — Mission Analyzer for ArduPilot / Mission Planner (.waypoints)](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/1)
-- [Mission Analyzer: Why Python, Not C++](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/9)
+## Reference catalogs
 
-**Mission analysis and route planning**
-- [MCP Markup: Making Your ArduPilot Lua Scripts Visible in Mission Analyzer](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/3)
-- [Automatic route detours around populated areas — problem statement is up](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/4)
-- [From Detecting Problems to Building Routes: Where We Are on Auto-Generated Missions](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/5)
-- [Route Optimization in Practice: What Breaks When You Actually Try It](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/6)
-- [Why a Drone's Route Must Be Optimized on the Ground, Not in the Air](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/7)
+Two built-in references describe what map data alone gets wrong or leaves out. Both use open standard formats, keep
+a source for every record, and are changed only after verification; your own corrections are stored separately and
+are never overwritten by a map data refresh.
 
-**Navigation**
-- [GPS Anti-Spoofing for ArduPilot — Sensor Cross-Check Approach](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/8)
+| Reference | File | Format | Contents |
+| --- | --- | --- | --- |
+| **Airfields** | `geodata/airfields.dat` | [apt.dat 1200](https://developer.x-plane.com/article/airport-data-apt-dat-file-format-specification/) (open airport data format) | ICAO/IATA codes, runways (thresholds, width), taxiways and aprons, field elevation; program-specific data in `1302 ma_*` fields |
+| **Landmarks** | `geodata/monuments.geojson` | GeoJSON with OpenStreetMap [Simple 3D Buildings](https://wiki.openstreetmap.org/wiki/Simple_3D_Buildings) properties (opens in QGIS / geojson.io) | Monuments, churches, stations: location, height, building parts with roof shapes and colours, or a link to a 3D model in `models3d` |
 
-**Simulation (ArduPlane SITL)**
-- [XX-1 aircraft model in ArduPlane SITL](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/10)
-- [How to simulate a pyro-cartridge launch of a UAV in ArduPlane SITL (XX-1 example)](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/11)
-
-**Map data and terrain for the simulator camera**
-- [How Mission Analyzer loads linear landmarks for the simulator: from Overpass to Overture](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/12)
-- [Linear landmarks on SRTM terrain: roads, railways, bridges, water and airfields without waves and steps](https://github.com/Mission-analyzer/Mission-analyzer-python/discussions/13)
+- **Airfields** (Map → Airfields): a table of all airfields known from the reference and from downloaded map data,
+  sorted alphabetically, with rename, runway length correction and a scheme view; copy to clipboard. Runways from the
+  reference are drawn in the camera and the terrain even where map data lacks them. Airfields you have flight-checked
+  and corrected yourself (in `airfields.json` next to the program) keep your geometry.
+- **Landmarks** (Map → Landmarks): grouped by city, with kind, height, how each landmark is drawn (OSM building parts,
+  own 3D model or a simplified figure) and its data source; double-click shows the landmark as the camera does.
+  Your own additions go into `monuments.json` next to the program.
 
 ## Installation (ready-made `.exe`)
 
@@ -99,20 +110,7 @@ You don't need Python to use the program — a portable Windows build is publish
 
 **Windows will show a warning — this is normal, not a virus signal.** The app isn't signed with a commercial
 certificate, so on first launch you'll see **"Windows protected your PC"** (SmartScreen). Click **"More info"**, then
-**"Run anyway"**. The entire source is in this repository if you want to check it.
-
-## Running from source
-
-Windows, **Python 3.11+** (developed on 3.14).
-
-```
-pip install -r requirements.txt
-python main.py
-```
-
-The core (mission table, analysis, charts, maps) needs only the standard library; the packages in
-`requirements.txt` enable the rest — PDF reports, MAVLink, the simulator, GPU rendering, video export and the forest
-map. Without an optional package the related feature is simply unavailable; the program still starts.
+**"Run anyway"**.
 
 ## Map data and offline use
 
@@ -122,52 +120,32 @@ All map data is downloaded once and stored next to the program; after that the p
 |---|---|---|---|
 | Satellite and map tiles | maps, nose camera, thermal imager | Google, OpenStreetMap | provider terms; © OpenStreetMap contributors |
 | Terrain | altitude analysis, camera, collisions | NASA SRTM via `terrain.ardupilot.org` | public domain |
-| Settlements, power lines, railways, obstacles | route analysis and optimization, camera, collisions | OpenStreetMap (Overpass API) | © OpenStreetMap contributors, ODbL |
-| Roads, road bridges, water | camera (landmarks), collisions with bridges | Overture Maps (from OpenStreetMap); Overpass as fallback | © OpenStreetMap contributors, Overture Maps Foundation, ODbL |
+| Land cover (10 m) | thermal imager, impact location | ESA WorldCover 2021 | CC BY 4.0 |
 | Forest canopy height (~10 m) | AGL over forest, collisions, camera | ETH Global Canopy Height 2020 (Lang et al., ETH Zürich) | CC BY 4.0 |
 | Buildings (footprints, height, floors) | collisions, camera, thermal imager | Overture Maps (OpenStreetMap, Esri, Google, Microsoft) | © OpenStreetMap contributors, Overture Maps Foundation, ODbL |
+| Roads, railways, bridges, water, stadiums | camera (landmarks), ground model, collisions with bridges | Overture Maps (from OpenStreetMap); Overpass as fallback | © OpenStreetMap contributors, Overture Maps Foundation, ODbL |
+| Settlements, power lines, obstacles | route analysis and optimization, camera, collisions | OpenStreetMap (Overpass API, Overture) | © OpenStreetMap contributors, ODbL |
+| Landmark building parts | camera, collisions | OpenStreetMap (Overpass API) | © OpenStreetMap contributors, ODbL |
+| Airfield and landmark data | references | OpenStreetMap, OurAirports, Wikipedia and other cited sources | per record, see the source field |
 | Occupied territories | mission map overlay | deepstatemap.live | source terms |
 
 Notes:
 - Forest heights are the 2020 state; buildings without a height in the source get a height estimated from the
   footprint area (marked "assumed" in collision messages).
-- Folders: `srtm`, and next to the map cache — `obstacles`, `canopy`, `buildings`. Copy them together with the program
-  to keep everything offline.
+- The folder layout is fixed: `srtm`, `map_cache` (obstacles, buildings, forest, land cover, roads, airfields) and
+  `models3d` live next to the program. Copy them together with the program to keep everything offline.
 
 ### SRTM tiles
 
-Terrain tiles are **not stored in the repository** (gigabytes of binary data). `srtm.py` downloads a tile from the
-public `terrain.ardupilot.org` mirror (the one Mission Planner uses) when it is first needed and keeps it in the SRTM
-folder set on the **Configuration** page. To trim a large SRTM folder down to specific regions:
+Terrain tiles are **not stored in the repository** (gigabytes of binary data). The program downloads a tile from the
+public `terrain.ardupilot.org` mirror (the one Mission Planner uses) when it is first needed and keeps it in the
+`srtm` folder next to the program.
 
-```
-python cleanup_srtm.py "path\to\SRTM\folder" --apply
-```
+### 3D models
 
-Without `--apply` the script only shows what would be moved (dry run).
-
-## Project structure
-
-| Files | Responsibility |
-|---|---|
-| `main.py`, `app.py` | Entry point and splash screen; main window, navigation, language switching |
-| `mission_page.py`, `mission_editor.py` | **Mission** page: waypoint table, `.waypoints` load/save, route map, editing |
-| `analysis_page.py`, `analyzer.py` | **Analysis** page and core analysis logic, PDF report |
-| `optimization_page.py`, `route_optimizer.py`, `populated_areas.py` | **Optimization**: detours around populated areas |
-| `simulation_page.py`, `sim_*.py` | **Simulation** page: SITL, MAVLink, control, HUD, maps, impacts, fly-by |
-| `nose_camera*.py`, `gl_camera.py` | Nose camera on the CPU (`nose_camera*`) and on the GPU (`gl_camera`), HUD window |
-| `hud_*.py` | HUD rendering, telemetry, limits and settings |
-| `scene_*.py`, `uav_panel.py` | 3D scene objects and the aircraft model |
-| `obstacles.py`, `terrain_impact.py` | OSM obstacles, forest canopy (ETH), buildings and landmarks (Overture); collision checks |
-| `map_page.py` | **Map** page: data coverage map, download for mission or region |
-| `config_page.py`, `sim_config_page.py`, `aircraft_profiles.py` | **Configuration**: analysis parameters, paths, HUD, aircraft profiles |
-| `ardupilot_link.py`, `sd_file_manager.py`, `board_ids.py` | Live MAVLink connection, SD-card file manager (MAVFTP) |
-| `joystick_input.py`, `video_export.py`, `alert_sound.py`, `limit_sound.py` | Joystick, MP4 export, sounds |
-| `srtm.py`, `geo.py`, `online_tiles.py`, `map_view.py` | Terrain, geometry, map tiles and their cache |
-| `i18n*.py`, `theme.py`, `icons.py`, `settings.py`, `meta.py`, `updater.py` | Localization, theme, settings, version and changelog, update check |
-| `main.spec`, `BUILD.md` | Windows `.exe` build (PyInstaller) |
-
-`settings.json` is created by the program on first launch and is not part of the repository.
+Put each model in its own folder inside `models3d` (`.glb` / `.gltf` / `.obj` with its materials). Scene objects
+(Configuration) and landmarks reference a model by its folder name. Models are simplified automatically to keep the
+camera fast.
 
 ## Localization
 
@@ -176,3 +154,6 @@ Ukrainian and English. Russian is deliberately not supported.
 ## License
 
 *License: MIT — © 2026 Sergey Gorbachevsky*
+
+The landmark reference `geodata/monuments.geojson` contains data © OpenStreetMap contributors and is made available
+under the [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
